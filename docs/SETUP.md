@@ -227,9 +227,10 @@ xtool dev build --ipa                     # -> xtool/HelloVPhone.ipa, unsigned
 ../tools/install-ipa.py xtool/HelloVPhone.ipa --launch com.example.HelloVPhone
 ```
 
-`xtool setup` installs the Darwin SDK it needs once (it asks for Xcode's `.xip`, which you download
+`xtool sdk install` installs the iOS SDK it needs once (it asks for Xcode's `.xip`, which you download
 from Apple). On the test PC the sample app built in 9 s, installed in 2 s and opened in the window,
-where taps reach it:
+where taps reach it. The full workflow (installing xtool, the edit–build–run loop, reading your
+app's log, crashes, uninstalling) is in [APP-DEVELOPMENT.md](APP-DEVELOPMENT.md).
 
 <img src="screenshots/xtool-app.png" width="260" alt="A SwiftUI app built with xtool on Linux, running in the VM">
 
