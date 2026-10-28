@@ -57,7 +57,7 @@ Tested guest pairings on Linux:
   services, file upload, self-update (`tools/vphoned.sh`, `tools/vphoned-update.sh`).
 - Your own apps: an iOS app built on Linux with [xtool](https://github.com/xtool-org/xtool) installs
   and runs with `tools/install-ipa.py`, no Apple ID or signing needed
-  ([docs/SETUP.md](docs/SETUP.md#6-run-your-own-app)).
+  ([docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md): build, run, logs, the edit–build–run loop).
 
 **Creating the VM on Linux, with no Mac**
 
@@ -123,6 +123,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [setup/](setup/README.md) | The two-step setup in this repo: build everything, then pick a device and an iOS version and create the VM |
 | [docs/SETUP.md](docs/SETUP.md) | The manual step-by-step: what you need, dependencies, building, creating the VM, first boot, your own apps |
 | [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md) | The create flow in detail: firmware, restore over USB/IP, custom firmware, first boot |
+| [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |

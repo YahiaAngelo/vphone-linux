@@ -35,6 +35,7 @@ Common arguments:
 | Tool | Usage | What it does |
 |---|---|---|
 | `install-ipa.py` | `tools/install-ipa.py APP.ipa [--launch BUNDLE_ID] [--cid CID]` | Uploads an .ipa to the guest over vsock, installs it with `apps.install` (vphoned signs it in the guest) and optionally launches it. Works with an unsigned `xtool dev build --ipa`. |
+| `app-logs.py` | `tools/app-logs.py PROCESS [--subsystem S] [--seconds N] [--cid CID] [--json]` | Prints an app's log lines from the running guest (vphoned `logs.syslog`), one per line; `--subsystem` keeps only the app's own `os.Logger` lines. See [APP-DEVELOPMENT.md](APP-DEVELOPMENT.md). |
 | `vphoned.sh` | `tools/vphoned.sh [-c CID] METHOD PATH [JSON]` | One HTTP request to vphoned, e.g. `GET /v1/health`, or `POST /v1/rpc '{"method":"screen.unlock","params":{},"id":1}'`. Uses AF_VSOCK with a 4 MiB socket buffer, or the `uds` socket when `$VSOCK_DIR/$CID.sock` exists. Keeps its write side open, as vphoned requires. `VPHONED_TIMEOUT` (default 300 s). |
 | `vphoned-update.sh` | `tools/vphoned-update.sh [-c CID] BINARY` | Replaces the guest's vphoned through its self-update: uploads to `/var/root/Library/Caches/vphoned.next`, then `agent.apply_update` with the SHA-256. The binary must be signed the way vphone-cli's `StageBundle.sh` signs it. Changes the VM's disk. |
 | `guest-get.py` | `tools/guest-get.py CID GUEST_PATH LOCAL_PATH` | Downloads a file with `GET /v1/files/content`, streaming. On vhost-vsock this stops after 64 KiB; it works on a `VSOCK=uds` VM. |
