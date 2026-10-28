@@ -247,7 +247,7 @@ do_patch() {
 # /run so a re-run does not start a second one.
 AUTOATTACH_PID=/run/vphone-usbip-autoattach.pid
 usb_helpers() {
-  dry sudo -v
+  [ "$DRY" = 1 ] || sudo -n true 2>/dev/null || sudo -v   # -v asks even with NOPASSWD unless every rule is
   dry sudo "$T/usbmuxd-32k.sh"
   if [ "$DRY" = 0 ] && sudo test -s "$AUTOATTACH_PID" &&
      sudo test -d "/proc/$(sudo cat "$AUTOATTACH_PID")"; then

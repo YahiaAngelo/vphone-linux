@@ -1,6 +1,6 @@
 # vphone-linux
 
-Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**.
+Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**, or on Windows 11 under WSL2 ([docs/WSL.md](docs/WSL.md)).
 
 <p align="center">
   <img src="docs/screenshots/lock-screen.png" width="200" alt="Lock screen">
@@ -125,6 +125,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md) | The create flow in detail: firmware, restore over USB/IP, custom firmware, first boot |
 | [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
+| [docs/WSL.md](docs/WSL.md) | Running on Windows 11 under WSL2: what differs (lavapipe, the kernel tree for APFS) and the one-time setup |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the machine model, SEP, GIC, USB touch, vsock and the GPU path fit together |

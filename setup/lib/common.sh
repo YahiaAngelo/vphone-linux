@@ -52,6 +52,10 @@ pick_json() { _json "$@"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# WSL2 (Windows Subsystem for Linux): a Microsoft kernel with no distro headers package,
+# the GPU reached through /dev/dxg (Mesa's dzn Vulkan driver) and Windows drives on /mnt.
+is_wsl() { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
+
 require_root() {
   [ "$(id -u)" = 0 ] || die "this step needs root (built-in steps tell you when)"
 }
