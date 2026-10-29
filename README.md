@@ -140,6 +140,7 @@ at the end (never killed by the scripts). Non-interactive:
 ```sh
 ./setup/create-vm.sh --device "iPhone17,3" --ios 26.6.2 --scale 1
 ./setup/create-vm.sh --list         # every device and its tested pairings
+./setup/create-vm.sh --frida ...    # also turn on vphone-cli's Frida kernel patches (docs/FRIDA.md)
 ```
 
 The pairings tested here: iPhone17,3 + iOS 26.6.2 and + iOS 27.0.1 (end to end with these scripts:
@@ -159,6 +160,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
 | [docs/WSL.md](docs/WSL.md) | Running on Windows 11 under WSL2: what differs (lavapipe, the kernel tree for APFS) and the one-time setup |
+| [docs/FRIDA.md](docs/FRIDA.md) | vphone-cli's Frida kernel patches (`create-vm.sh --frida`) and what is still open |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the machine model, SEP, GIC, USB touch, vsock and the GPU path fit together |

@@ -5,6 +5,7 @@
 #   ./create-vm.sh --device "iPhone17,3" --ios 26.6.2
 #   ./create-vm.sh --list                          # devices + tested pairings
 #   ./create-vm.sh --dry-run --device ... --ios ... # print the pipeline, run nothing
+#   ./create-vm.sh --frida ...                     # also turn on vphone-cli's Frida kernel patches
 #
 # The pipeline is vphone-cli's Linux firmware flow (docs/SETUP.md §5) with one
 # state file per VM, so a re-run resumes after an interrupted step. QEMU is
@@ -14,7 +15,7 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 DEVICE=${DEVICE:-} IOS=${IOS:-} CLOUDOS_PICK=${CLOUDOS_PICK:-}
-SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3}
+SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3} FRIDA=${FRIDA:-0}
 while [ $# -gt 0 ]; do
   case $1 in
     --device)  DEVICE=$2; shift ;;
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
     --cid)     CID=$2; shift ;;     # the VM's vsock CID (default 3; another VM may hold it)
     --dry-run) DRY=1 ;;
     --list)    LIST=1 ;;
+    --frida)   FRIDA=1 ;;   # vphone-cli's Frida Stalker kernel patches (off in the standard preset)
     -y)        export VSETUP_ASSUME_YES=1 ;;
     *) die "unknown option: $1" ;;
   esac; shift
@@ -97,6 +99,20 @@ if [ "$PAIR_LINUX" = 0 ] && [ "$DRY" = 0 ]; then
 fi
 [ -n "$CLOUDOS_PICK" ] && PAIR_CLOUDOS=$CLOUDOS_PICK
 
+# vphone-cli's Frida kernel patches: declared in every preset but left off by `standard`
+# (they widen what any guest process may do). vphone-cli applies them on cloudOS 26.4+ only.
+FRIDA_PATCHES=(
+  kernel-exp-frida_thread_set_state_entitlement_flag
+  kernel-exp-frida_vm_map_delete_immutable_code
+  kernel-exp-frida_tpro_off
+  kernel-exp-frida_syscall_filter_off
+)
+if [ "$FRIDA" = 1 ]; then
+  cver=${PAIR_CLOUDOS%%-*}
+  [ "$(printf '%s\n' 26.4 "$cver" | sort -V | head -1)" = 26.4 ] ||
+    die "--frida needs cloudOS 26.4 or newer (this pairing uses $PAIR_CLOUDOS)"
+fi
+
 # ------------------------------------------------------------ the pipeline --
 NAME=${NAME:-vphone-${DEVICE//,/-}-${IOS//./}}
 VM=$VSETUP_DEVICES/$NAME
@@ -134,6 +150,7 @@ log "Device:  $DEVICE ($DEVICE_NAME)"
 log "iOS:     $IOS (build $PAIR_BUILD)   cloudOS: $PAIR_CLOUDOS   preset: $PAIR_PRESET"
 [ -n "${PAIR_NOTE:-}" ] && log "Note:    $PAIR_NOTE"
 log "VM:      $VM   (scale ${SCALE}x, vsock CID $CID)"
+[ "$FRIDA" = 1 ] && log "Frida:   the Frida kernel patches are turned on (--frida)"
 [ "$DRY" = 1 ] && log "DRY RUN: nothing below executes."
 
 VC=$VSETUP_SRC/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli
@@ -241,6 +258,14 @@ do_prepare() {
       --gpu-driver-bundle "$gpu_bundle"
 }
 
+# --frida: record the Frida patches in the VM's patch choice (PatchSelection.plist),
+# which `fw prepare`/`fw patch` read. Runs before the firmware is patched.
+do_frida() {
+  local args=() p
+  for p in "${FRIDA_PATCHES[@]}"; do args+=(--allow "$p"); done
+  dry "$VC" fw set-patches -l "$VSETUP_DEVICES" "$NAME" "${args[@]}"
+}
+
 do_patch() {
   # iOS 27 pairings need the seal patcher, which mounts the restore ramdisk read-write through
   # linux-apfs-rw (root). A 26.x pairing patches as the user. (The restore TXM's pre-check for
@@ -338,6 +363,14 @@ do_cfw() {
 
 step sanity   do_sanity
 step bundle   do_bundle
+if [ "$FRIDA" = 1 ]; then
+  if done_step patch && ! done_step frida; then
+    warn "--frida: this VM's firmware is already patched without the Frida patches."
+    warn "Create a new VM with --frida (another --name), or see docs/FRIDA.md to add them to this one."
+    exit 1
+  fi
+  step frida    do_frida
+fi
 step firmware do_firmware
 step gpu-driver do_gpu_driver
 step prepare  do_prepare

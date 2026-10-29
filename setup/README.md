@@ -96,6 +96,7 @@ output, swiftly's lines in your shell profile, and the system packages setup.sh 
 | `--cloudos IPSW` | override the pairing's cloudOS image |
 | `--name N` | VM name (default `vphone-<device>-<ios>`) |
 | `--scale 1|2|3` | display scale (default 1x — 9× fewer pixels than 3x; iOS 27 does not go below 2x) |
+| `--frida` | turn on vphone-cli's Frida kernel patches before the firmware is patched (cloudOS 26.4+; see [docs/FRIDA.md](../docs/FRIDA.md)) |
 | `--dry-run` | print every command the pipeline would run, execute nothing |
 | `--list` | print devices and their pairings |
 | `--cid N` | the VM's vsock CID (default 3; pick another next to a running VM) |
