@@ -10,7 +10,9 @@ shm=$(df -BG --output=avail /dev/shm | tail -1 | tr -dc 0-9)
 [ "$shm" -ge 9 ] && pass "/dev/shm has ${shm} GB free" || warn "/dev/shm has ${shm} GB free; the guest's RAM (MEM, default 8G) lives there"
 if command -v vulkaninfo >/dev/null; then
   g=$(vulkaninfo --summary 2>/dev/null | awk -F= '/deviceName/{print $2; exit}')
-  [ -n "$g" ] && pass "Vulkan GPU:$g" || warn "vulkaninfo found no Vulkan GPU"
+  if [ -z "$g" ]; then warn "vulkaninfo found no Vulkan GPU"
+  elif vulkaninfo --summary 2>/dev/null | grep -q 'PHYSICAL_DEVICE_TYPE_\(DISCRETE\|INTEGRATED\|VIRTUAL\)_GPU'; then pass "Vulkan GPU:$g"
+  else warn "the only Vulkan device is a CPU renderer ($g): install your GPU's Vulkan driver (Arch: nvidia-utils, vulkan-radeon or vulkan-intel); in a VM, the host must pass Vulkan through (virtio-gpu Venus)"; fi
 else warn "vulkaninfo not installed (package vulkan-tools); can't check the GPU"; fi
 [ -r /dev/vhost-vsock ] && [ -w /dev/vhost-vsock ] && pass "/dev/vhost-vsock usable" \
   || warn "/dev/vhost-vsock missing or not read/write for you (sudo modprobe vhost_vsock; see docs/SETUP.md)"
