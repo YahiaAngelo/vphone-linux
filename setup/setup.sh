@@ -126,7 +126,11 @@ do_phase deps && {
     [ "$(distro_family)" != arch ] || die "run setup.sh as your user (it uses sudo itself); makepkg and swiftly refuse root"
     pkg_feeds
   else
-    confirm "Install the system packages with sudo? ($(detect_distro))" && pkg_feeds
+    if confirm_yes "Install the system packages with sudo? ($(detect_distro))"; then
+      pkg_feeds
+    else
+      warn "Skipped the system packages: the build needs them (see docs/SETUP.md)."
+    fi
   fi
 
   # rustup (reims-vgpu) — its own pins come from rust-toolchain.toml
@@ -146,6 +150,7 @@ do_phase deps && {
   # installed with swiftly and called by its full path (setup/lib/swift.sh). On Arch it
   # uses swiftly's ubi9 build plus ncurses links inside the toolchain.
   ensure_swift
+  swift_link_commands
   if confirm "Set the vhost_vsock and vm.max_map_count host settings with sudo (only those missing)?"; then
     host_settings
   fi

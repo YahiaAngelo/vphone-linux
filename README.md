@@ -111,6 +111,20 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ./setup/create-vm.sh                # pick a device and an iOS version; it creates the VM
 ```
 
+Run `setup.sh` as your normal user, not with `sudo`: it asks for your password when it needs it.
+If a step fails, fix it and run the script again; it skips the work that's already done. You can
+also run one phase at a time: `./setup/setup.sh deps` (or `sources`, `build`, `release`).
+
+**Swift is installed for you.** `setup.sh` installs swiftly and the Swift version pinned in
+`linux-create/.swift-version` (6.4.1), and puts only `swift`, `swiftc` and `swiftly` into
+`~/.local/bin`. It doesn't change your shell profile, and the toolchain's `clang`/`lld` never replace
+your system ones. To rebuild or run vphone-cli's firmware tools on their own:
+
+```sh
+linux-create/build.sh                    # build (installs Swift first if it's missing)
+linux-create/vphone-cli --help           # run it; sudo linux-create/vphone-cli … for root steps
+```
+
 `create-vm.sh` menus down to a tested device/iOS pairing, runs the whole create flow
 (`fw prepare` + `fw patch`, the DFU restore, the SSH-ramdisk CFW install, the snapshot flip),
 keeps one state file per VM so a re-run resumes after a failed step, and starts QEMU exactly once

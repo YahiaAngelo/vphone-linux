@@ -30,6 +30,14 @@ confirm() { # confirm <prompt>
   [ "$a" = Y ] || [ "$a" = y ]
 }
 
+confirm_yes() { # confirm_yes <prompt>: like confirm, but Enter means yes
+  [ "${VSETUP_ASSUME_YES:-0}" = 1 ] && return 0
+  local a
+  printf '\033[1;34m?>\033[0m %s [Y/n] ' "$*" >&2
+  read -rn 1 a || a=y; [ -z "$a" ] || printf '\n' >&2
+  [ "$a" != N ] && [ "$a" != n ]
+}
+
 # ---- jq-free JSON helpers (python3 is a base dependency anyway) ----------
 
 _json() { python3 "$VSETUP_ROOT/lib/json_query.py" "$1" "$2"; }
