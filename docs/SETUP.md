@@ -79,6 +79,8 @@ Then:
 - **Rust**, with [rustup](https://rustup.rs).
 - **Swift 6.4.1** for Linux, with [swiftly](https://www.swift.org/install/linux/) (tested with
   `swift-6.4.1-RELEASE`). It builds vphone-cli's firmware tools.
+  On Arch-based distros the toolchain may also need an ncurses compatibility library
+  (e.g. `libncurses.so.6`); `setup.sh` lists any libraries it is missing.
 - **rcodesign**, which signs app bundles while the VM is created: `cargo install apple-codesign --locked`.
 
 Set two system options. They are permanent, so this is needed only once:

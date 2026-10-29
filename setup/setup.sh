@@ -83,19 +83,38 @@ do_phase deps && {
     log " Installing rcodesign (apple-codesign)"
     cargo install apple-codesign --locked
   fi
-  # swiftly (Swift for the vphone-cli Linux build)
+  # swiftly (Swift for the vphone-cli Linux build). swift.org ships one
+  # tarball per CPU (swiftly-x86_64 / swiftly-aarch64); the old arch-less
+  # swiftly.tar.gz now 404s.
   if ! have swift; then
     log " Installing swiftly + Swift 6.4.1"
-    curl -O https://download.swift.org/swiftly/linux/swiftly.tar.gz
-    tar -zxf swiftly.tar.gz && rm swiftly.tar.gz
-    ./swiftly install -y 6.4.1  # swiftly 6.4.1; ask: 'swiftly install 6.4.1' if script name changes
-    rm -f ./swiftly
+    swiftly_tgz="swiftly-$(uname -m).tar.gz"
+    swiftly_tmp=$(mktemp -d)
+    curl -fsSL -o "$swiftly_tmp/$swiftly_tgz" "https://download.swift.org/swiftly/linux/$swiftly_tgz"
+    tar -zxf "$swiftly_tmp/$swiftly_tgz" -C "$swiftly_tmp"
+    # init installs swiftly itself into ~/.local/share/swiftly; the toolchain
+    # comes next, pinned, instead of init's "latest".
+    "$swiftly_tmp/swiftly" init --assume-yes --skip-install --quiet-shell-followup
+    rm -rf "$swiftly_tmp"
     # shellcheck disable=SC1091  # swiftly's env file, outside this checkout
-    if [ -r "$HOME/.local/share/swiftly/env.sh" ]; then
-      . "$HOME/.local/share/swiftly/env.sh"
-    else
-      # shellcheck disable=SC1091
-      . "$HOME/.swiftly/env.sh"
+    . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
+    hash -r
+    swiftly install --assume-yes --use 6.4.1
+    hash -r
+  fi
+  # Swift's Linux toolchains are built for Ubuntu/RHEL; on other distros
+  # (Arch in particular) some of their libraries, usually ncurses, can be
+  # missing. List them instead of letting the build fail later.
+  swift_tc="${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/toolchains/6.4.1/usr/bin"
+  if [ -d "$swift_tc" ] && have ldd; then
+    swift_missing=$(ldd "$swift_tc"/* 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' || true)
+    if [ -n "$swift_missing" ]; then
+      warn "Swift toolchain is missing libraries: $swift_missing"
+      case $(detect_distro) in
+        arch*|cachyos*|manjaro*)
+          warn "  on Arch, install an ncurses compatibility package (AUR: ncurses5-compat-libs)"
+          warn "  or link libncursesw.so.6 -> libncurses.so.6 / libtinfo.so.6 as needed" ;;
+      esac
     fi
   fi
   # sysctl for reims-vgpu's guest-memory mappings
