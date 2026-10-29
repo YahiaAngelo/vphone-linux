@@ -4,7 +4,11 @@
 #   ./setup/uninstall.sh             # asks before each part
 #   ./setup/uninstall.sh --dry-run   # only prints what it would do
 #   ./setup/uninstall.sh -y          # no questions (VMs are still kept)
-#   ./setup/uninstall.sh --vms       # also delete the VMs and downloads (~/vphone-setup-work)
+#   ./setup/uninstall.sh --vms       # also delete your VMs (~/vphone-setup-work/devices)
+#   ./setup/uninstall.sh --downloads # also delete what create-vm.sh and setup.sh downloaded:
+#                                    #   iOS/cloudOS IPSWs (~/.cache/vphone), the extracted GPU
+#                                    #   driver and the vphone-cli release (~/vphone-setup-work)
+#   ./setup/uninstall.sh --all       # everything above: --vms --downloads, one question, then -y
 #
 # Removed:
 #   - system packages only vphone-linux uses (lzfse, libxml2-legacy, libimobiledevice...),
@@ -15,20 +19,23 @@
 #   - this checkout's build output (QEMU, reims-vgpu, linux-create, apfs.ko, usbmuxd);
 #   - swiftly's lines in your shell profiles (a .bak copy is kept);
 #   - the vphone sysctl / vhost-vsock config files from docs/SETUP.md, if present.
-# Kept: the checkout's sources, and your VMs unless --vms is given.
+# Kept: the checkout's sources; your VMs unless --vms; downloads unless --downloads.
+# Even --all keeps packages other apps need, and a rustup you installed yourself.
 set -Eeuo pipefail
 # shellcheck disable=SC1091  # this checkout's own lib files, resolved at run time
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 # shellcheck disable=SC1091
 source "$VSETUP_ROOT/lib/swift.sh"
 
-DRY=0; VMS=0
+DRY=0; VMS=0; DL=0; ALL=0
 while [ $# -gt 0 ]; do
   case $1 in
     -y|--yes)  VSETUP_ASSUME_YES=1 ;;
     --dry-run) DRY=1 ;;
     --vms)     VMS=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --downloads) DL=1 ;;
+    --all)     ALL=1; VMS=1; DL=1 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac; shift
 done
@@ -41,6 +48,12 @@ run() { # print, then run unless --dry-run
 ask() { [ "$DRY" = 1 ] || confirm "$@"; }
 existing() { local p; for p in "$@"; do [ -e "$p" ] || [ -L "$p" ] && echo "$p"; done; return 0; }
 [ "$DRY" = 1 ] && log "DRY RUN: nothing is changed."
+if [ "$ALL" = 1 ] && [ "$DRY" = 0 ]; then
+  warn "--all deletes vphone-linux's build output, Swift, its packages, your VMs and every download."
+  # Asked even with -y; after this, nothing else is asked (the package manager may still confirm).
+  VSETUP_ASSUME_YES=0 confirm "Delete everything?" || die "nothing was changed"
+  VSETUP_ASSUME_YES=1
+fi
 
 SRC=$(cd "$VSETUP_SRC" && pwd)
 
@@ -174,20 +187,36 @@ if [ ${#etc[@]} -gt 0 ]; then
   if ask "Delete them (they take effect again only after a reboot)?"; then run sudo rm -f "${etc[@]}"; fi
 fi
 
-# ------------------------------------------------------------ VMs, release ---
-work=$HOME/vphone-setup-work
-if [ -d "$work" ]; then
+# ------------------------------------------------------------------- VMs ---
+if [ -d "$VSETUP_DEVICES" ]; then
   if [ "$VMS" = 1 ]; then
-    log "VMs, firmware downloads and the vphone-cli release: $work ($(du -sh "$work" 2>/dev/null | cut -f1))"
-    # Asked even with -y: this deletes the VMs themselves.
-    if [ "$DRY" = 1 ] || { VSETUP_ASSUME_YES=0 confirm "Delete $work and every VM in it?"; }; then
-      run rm -rf "$work"
+    log "VMs: $VSETUP_DEVICES ($(du -sh "$VSETUP_DEVICES" 2>/dev/null | cut -f1))"
+    ls -1 "$VSETUP_DEVICES" 2>/dev/null | sed 's/^/   /'
+    # Asked even with -y (but not after --all's question): this deletes the VMs themselves.
+    if [ "$DRY" = 1 ] || [ "$ALL" = 1 ] || { VSETUP_ASSUME_YES=0 confirm "Delete every VM in $VSETUP_DEVICES?"; }; then
+      run rm -rf "$VSETUP_DEVICES"
     fi
   else
-    log "Kept your VMs and downloads in $work (delete them with --vms)"
+    log "Kept your VMs in $VSETUP_DEVICES (delete them with --vms)"
   fi
 fi
-[ -d "$HOME/.cache/vphone" ] && log "Firmware cache kept: $HOME/.cache/vphone (rm -rf it to free space)"
+
+# -------------------------------------------------------------- downloads ---
+# create-vm.sh: IPSWs and maybe the GPU driver in ~/.cache/vphone, the GPU driver it
+# extracts into the release folder; setup.sh release: the vphone-cli release zip and app.
+mapfile -t dls < <(existing "$HOME/.cache/vphone" "$VSETUP_RELEASE")
+if [ ${#dls[@]} -gt 0 ]; then
+  if [ "$DL" = 1 ]; then
+    log "Downloads ($(du -shc "${dls[@]}" 2>/dev/null | tail -1 | cut -f1)):"
+    for d in "${dls[@]}"; do printf '   %s\n' "$d"; ls -1 "$d" 2>/dev/null | sed 's/^/     /'; done
+    if ask "Delete the downloads (create-vm.sh fetches them again next time)?"; then run rm -rf "${dls[@]}"; fi
+  else
+    log "Kept the downloads (delete them with --downloads):"; printf '   %s\n' "${dls[@]}"
+  fi
+fi
+# Remove the work folder once nothing is left in it.
+work=$HOME/vphone-setup-work
+[ "$DRY" = 0 ] && [ -d "$work" ] && rmdir "$work" 2>/dev/null || true
 
 # Keep the record of anything still installed (declined, or still needed), so a
 # later run can offer it again.
