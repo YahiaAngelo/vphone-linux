@@ -16,12 +16,13 @@ modprobe vhci-hcd
 # Without a rule the attached device is root-only, libirecovery skips it, and recovery-probe
 # times out ("did not enter dfu/recovery mode in time"). Distros that ship libirecovery's own
 # rule give it to a group (plugdev, storage...) the user is often not in, and Arch has none at
-# all. This one lives in /run, so it is gone after a reboot, like the usbmuxd mask.
+# all. This one lives in /run, so it is gone after a reboot, like the usbmuxd mask. MODE:= (final):
+# systemd's 50-udev-default.rules, read after it, would set USB devices back to 0664.
 RULE=/run/udev/rules.d/39-vphone-dfu.rules
 mkdir -p "${RULE%/*}"
 cat > "$RULE" <<'RULES'
 # vphone-linux (tools/usbip-autoattach.sh): Apple DFU, WTF and recovery mode devices for libirecovery.
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="122[27]|128[0-3]", MODE="0666"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="122[27]|128[0-3]", MODE:="0666"
 RULES
 udevadm control --reload 2>/dev/null || true
 # A device attached before the rule existed gets it now.
