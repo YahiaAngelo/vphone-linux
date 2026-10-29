@@ -85,8 +85,10 @@ macOS instructions instead of pretending they work on Linux alone.
 
 `./setup/uninstall.sh` (`--dry-run` to preview, `-y` for no prompts, `--vms` to also delete
 `~/vphone-setup-work`) removes Swift/swiftly, rcodesign, rustup if setup installed it, the build
-output, swiftly's lines in your shell profile, and the system packages setup.sh recorded in
-`~/.local/state/vphone-linux/packages.txt`, except ones another package still needs.
+output, swiftly's lines in your shell profile, and system packages: the ones only vphone-linux
+uses (lzfse, libxml2-legacy, usbip, libimobiledevice and its libraries) plus any setup.sh recorded in
+`~/.local/state/vphone-linux/packages.txt`. It keeps any that another installed package needs, and
+says which package needs it.
 
 ## Flags
 

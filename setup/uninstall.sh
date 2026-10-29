@@ -7,8 +7,9 @@
 #   ./setup/uninstall.sh --vms       # also delete the VMs and downloads (~/vphone-setup-work)
 #
 # Removed:
-#   - system packages setup.sh installed (recorded in ~/.local/state/vphone-linux/packages.txt),
-#     except any another installed package still needs (pacman -Rsu on Arch);
+#   - system packages only vphone-linux uses (lzfse, libxml2-legacy, libimobiledevice...),
+#     and any others setup.sh recorded installing (~/.local/state/vphone-linux/packages.txt),
+#     except those another installed package still needs;
 #   - Swift and swiftly, and the swift/swiftc/swiftly commands in ~/.local/bin;
 #   - rcodesign, and rustup only if setup.sh installed it;
 #   - this checkout's build output (QEMU, reims-vgpu, linux-create, apfs.ko, usbmuxd);
@@ -101,30 +102,68 @@ elif have rustup; then
 fi
 
 # --------------------------------------------------------- system packages ---
-pkgs=()
-if [ -s "$VSETUP_STATE/packages.txt" ]; then
-  current=$(installed_pkgs)
-  while read -r p; do
-    [ -n "$p" ] && grep -qx "$p" <<<"$current" && pkgs+=("$p")
-  done < "$VSETUP_STATE/packages.txt"
-fi
+# Candidates: what setup.sh recorded installing, plus the packages only vphone-linux
+# uses (removed even without a record, e.g. after a setup.sh that predates it).
+# General tools (git, gcc, python, meson...) are only removed when recorded.
+vphone_only_pkgs() {
+  case $(distro_family) in
+    arch)   echo lzfse libxml2-legacy libtatsu libimobiledevice libusbmuxd libimobiledevice-glue usbip ;;
+    fedora) echo lzfse-devel libtatsu-devel libimobiledevice-devel libusbmuxd-devel libimobiledevice-glue-devel usbip ;;
+    debian) echo liblzfse-dev libtatsu-dev libimobiledevice-dev libusbmuxd-dev libimobiledevice-glue-dev usbip ;;
+  esac
+}
+# The installed packages that depend on $1 (one per line).
+required_by() {
+  case $(distro_family) in
+    arch)   LC_ALL=C pacman -Qi "$1" 2>/dev/null | awk -F': *' '/^Required By/{print $2}' |
+              tr -s ' ' '\n' | grep -vx -e None -e '' || true ;;
+    fedora) dnf repoquery --installed --whatrequires "$1" --qf '%{name}\n' 2>/dev/null | grep -vx "$1" || true ;;
+    debian) apt-cache rdepends --installed --no-recommends --no-suggests "$1" 2>/dev/null |
+              tail -n +3 | sed 's/^[ |]*//' | grep -vx "$1" || true ;;
+  esac
+}
+
+current=$(installed_pkgs)
+cands=()
+for p in $( { cat "$VSETUP_STATE/packages.txt" 2>/dev/null || true; vphone_only_pkgs | tr ' ' '\n'; } | sort -u); do
+  grep -x "$p" <<<"$current" >/dev/null && cands+=("$p")
+done
+# Keep any candidate another installed package needs; a candidate needed only by
+# other candidates that are going too can go. Repeat until nothing changes.
+declare -A keep_why=()
+changed=1
+while [ "$changed" = 1 ]; do
+  changed=0
+  for p in "${cands[@]}"; do
+    [ -n "${keep_why[$p]:-}" ] && continue
+    for r in $(required_by "$p"); do
+      if ! printf '%s\n' "${cands[@]}" | grep -x "$r" >/dev/null || [ -n "${keep_why[$r]:-}" ]; then
+        keep_why[$p]=$r; changed=1; break
+      fi
+    done
+  done
+done
+pkgs=(); kept=()
+for p in "${cands[@]}"; do
+  if [ -n "${keep_why[$p]:-}" ]; then kept+=("$p (needed by ${keep_why[$p]})"); else pkgs+=("$p"); fi
+done
+
+[ ${#kept[@]} -gt 0 ] && { log "Kept, other installed packages need them:"; printf '   %s\n' "${kept[@]}"; }
 if [ ${#pkgs[@]} -gt 0 ]; then
-  log "System packages setup.sh installed (${#pkgs[@]}):"; printf '%s\n' "${pkgs[@]}" | paste -sd' ' | fold -s -w 96 | sed 's/^/   /'
-  if ask "Remove the ones no other installed package needs?"; then
+  log "System packages only vphone-linux uses or setup.sh installed (${#pkgs[@]}):"
+  printf '%s\n' "${pkgs[@]}" | paste -sd' ' | fold -s -w 96 | sed 's/^/   /'
+  if ask "Remove them? (the package manager lists everything and asks again)"; then
     case $(distro_family) in
-      # -u skips any target another package still needs; -s takes along
-      # dependencies nothing else uses. pacman shows the final list and asks.
-      arch)   run sudo pacman -Rsu "${pkgs[@]}" ;;
-      fedora) run sudo dnf remove "${pkgs[@]}" ;;   # dnf lists everything it would remove, and asks
-      debian) run sudo apt-get remove --autoremove "${pkgs[@]}" ;;
+      # -u is a second guard against removing anything still needed; -s also takes
+      # their own dependencies that nothing else uses.
+      arch)   run sudo pacman -Rsu "${pkgs[@]}" || warn "pacman removed nothing" ;;
+      fedora) run sudo dnf remove "${pkgs[@]}" || warn "dnf removed nothing" ;;
+      debian) run sudo apt-get remove --autoremove "${pkgs[@]}" || warn "apt removed nothing" ;;
       *) warn "unknown distro: remove these yourself" ;;
     esac
   fi
-elif [ ! -f "$VSETUP_STATE/packages.txt" ]; then
-  warn "No record of the packages setup.sh installed ($VSETUP_STATE/packages.txt)."
-  warn "It is written by setup.sh since this uninstaller was added; earlier runs left none, so"
-  warn "no system packages are removed. The vphone-only ones on Arch, if you want them gone:"
-  warn "  sudo pacman -Rsu lzfse libxml2-legacy libtatsu libimobiledevice libusbmuxd libimobiledevice-glue usbip"
+elif [ ${#cands[@]} -eq 0 ]; then
+  log "No vphone-linux system packages are installed"
 fi
 
 # ---------------------------------------------------- system config files ---
