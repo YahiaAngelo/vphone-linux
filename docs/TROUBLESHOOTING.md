@@ -97,6 +97,15 @@ shifting `nvram.bin` 16 KiB forward (16 KiB of zeros, then the first 32 MiB).
 mark each USB request done in the request descriptor itself (`flags = 0x8000`), not in a register as
 AVPBooter and iBoot do. Use the restore QEMU with the current `hw/vmapple/vusb.c`.
 
+**"The device did not enter dfu/recovery mode in time"** (from `recovery-probe`, the GPU-driver
+step or `create-vm.sh`). Run `tools/dfu-diagnose.sh <run-dir>` as your user: it checks QEMU, the
+exporter, the attach loop and the attached device. The usual cause on Arch and other distros
+without a matching libirecovery udev rule: the DFU device is attached but root-only, so
+vphone-cli's libirecovery, running as your user, cannot open it and skips it. The current
+`tools/usbip-autoattach.sh` installs a rule for it in `/run/udev/rules.d` (gone at reboot);
+restart an attach loop started from an older checkout (`sudo pkill -f usbip-autoattach.sh`, then
+`sudo tools/usbip-autoattach.sh`).
+
 **"Unable to discover device mode" right after `dfu-up.sh`.** An exporter from an earlier run still
 holds 127.0.0.1:3240 for a VM that is gone. The current `dfu-up.sh` stops every old
 `vusb-usbip.py` first.

@@ -260,7 +260,7 @@ usb_helpers() {
 do_restore() {
   usb_helpers
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-dfu"
-  dry "$VC" recovery-probe --ecid "$ECID" --timeout 180
+  dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-dfu"; return 1; }
   dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
   dry "$T/dfu-stop.sh" "$VM"     # this VM's QEMU only, matched by its Disk.img
 }
@@ -290,7 +290,7 @@ do_cfw() {
   dry "$T/restore-tree-mode.sh" "$VSETUP_DEVICES" "$NAME" ssh
   dry python3 "$T/nvram-autoboot.py" "$VM/nvram.bin" --auto-boot false
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-sshrd"
-  dry "$VC" recovery-probe --ecid "$ECID" --timeout 180
+  dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-sshrd"; return 1; }
   # --boot-ramdisk ends by waiting for restore mode, which the SSH ramdisk never enters: it runs
   # in the background under a time limit, and the step goes on once SSH answers.
   if [ "$DRY" = 1 ]; then
