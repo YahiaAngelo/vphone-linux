@@ -125,6 +125,13 @@ linux-create/build.sh                    # build (installs Swift first if it's m
 linux-create/vphone-cli --help           # run it; sudo linux-create/vphone-cli … for root steps
 ```
 
+**Uninstalling.** `./setup/uninstall.sh` removes what setup installed and built: Swift and swiftly,
+rcodesign (and rustup, only if setup installed it), the build output in this checkout, and the
+system packages setup installed that no other installed package needs. It asks before each part;
+`--dry-run` shows what it would do. Your VMs in `~/vphone-setup-work` are kept unless you add `--vms`.
+setup.sh records which packages it installed in `~/.local/state/vphone-linux/`, so packages you
+already had are never removed.
+
 `create-vm.sh` menus down to a tested device/iOS pairing, runs the whole create flow
 (`fw prepare` + `fw patch`, the DFU restore, the SSH-ramdisk CFW install, the snapshot flip),
 keeps one state file per VM so a re-run resumes after a failed step, and starts QEMU exactly once
