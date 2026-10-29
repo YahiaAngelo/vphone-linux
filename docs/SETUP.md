@@ -70,13 +70,15 @@ sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson
   libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel
 ```
 
-On Arch Linux (and CachyOS, EndeavourOS, Manjaro...):
+On Arch Linux and Omarchy (and CachyOS, EndeavourOS, Manjaro...), with the system up to date first
+(`sudo pacman -Syu`, or `omarchy update` on Omarchy; reboot if the kernel was updated):
 
 ```sh
 sudo pacman -S --needed git base-devel gcc clang lld binutils make cmake ninja meson pkgconf \
   python python-pillow python-setuptools rsync glib2 pixman libslirp libssh zstd nettle gnutls \
-  gtk3 sdl2-compat bzip2 libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers \
-  vulkan-tools socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg libusb libplist \
+  gtk3 sdl2-compat bzip2 zlib libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers \
+  vulkan-tools libxext libxrandr libxcursor libxi libxfixes libxtst libdecor libdrm flex bison dtc \
+  socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg libusb libplist \
   libimobiledevice-glue libimobiledevice libusbmuxd libtatsu libarchive openssl \
   libxml2-legacy libedit sqlite "$(cat /usr/lib/modules/$(uname -r)/pkgbase)-headers"
 git clone https://aur.archlinux.org/lzfse.git /tmp/lzfse
@@ -86,7 +88,11 @@ echo "options+=('!lto')" >> /tmp/lzfse/PKGBUILD && (cd /tmp/lzfse && makepkg -si
 `lzfse` is only in the AUR. Build it with LTO off as above (not with yay/paru): Arch's default LTO
 fills its static `liblzfse.a` with GCC's intermediate code, which the Swift toolchain's linker cannot
 read (`undefined symbol: lzfse_encode_buffer`). `libxml2-legacy` provides `libxml2.so.2`, which the Swift toolchain
-(`swift build`, `lld`) needs; Arch's own `libxml2` is a newer, incompatible version.
+(`swift build`, `lld`) needs; Arch's own `libxml2` is a newer, incompatible version. The last
+package is the headers for the kernel you run (`linux-headers`, `linux-zen-headers`...). Your GPU's
+Vulkan driver must be installed too: `nvidia-utils` (Omarchy installs it on NVIDIA PCs),
+`vulkan-radeon` or `vulkan-intel`. Arch already sets `vm.max_map_count` to 1048576.
+`setup/setup.sh` does all of this (the list lives in `setup/lib/packages.sh`).
 
 On other distributions, install the same packages under their names there. `lld` provides
 `lld-link` and `ld.lld`, which reims-vgpu's option ROM is linked with (`reims-vgpu/firmware/Makefile`). (Checked in a clean
@@ -224,6 +230,12 @@ tools/vphoned.sh POST /v1/rpc '{"method":"screen.unlock","params":{},"id":1}'
 
 If it answers "Lock Screen did not dismiss in time", wait 15 seconds and run it again. Swiping up from
 the bottom of the screen also works.
+
+**On Omarchy (or any Hyprland setup)** the window is tiled and stretched by default. Run
+`tools/omarchy-window.sh` once (`setup/setup.sh` offers it): it adds a Hyprland rule,
+`~/.config/hypr/vphone-linux.lua`, that floats the window centred at the iPhone's shape, 85% of the
+screen's height, fully opaque, and keeps the PC from idling while it has focus.
+`tools/omarchy-window.sh --remove` undoes it.
 
 **Using it:** click to tap, drag to scroll, swipe up from the bottom edge (or middle-click) to go
 Home. If clicks do nothing, the screen has gone to sleep: run the unlock command again, and set

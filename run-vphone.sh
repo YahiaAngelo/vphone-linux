@@ -82,9 +82,17 @@ if [ "${GFX:-0}" = 1 ]; then
   export REIMS_VGPU_WINDOW=${WINDOW:-0}
   export REIMS_VGPU_WINDOW_TITLE=${REIMS_VGPU_WINDOW_TITLE:-vphone-linux}
   # Every GPU task process must pick the same Vulkan device as QEMU (a task
-  # process left to the loader picked llvmpipe)
-  if [ -z "${VK_DRIVER_FILES:-}" ] && [ -f /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ]; then
-    export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+  # process left to the loader picked llvmpipe). NVIDIA's manifest is nvidia_icd.x86_64.json on
+  # Fedora and nvidia_icd.json on Arch/Omarchy and Debian. With no NVIDIA one, every installed
+  # driver except Mesa's CPU renderer (lvp, llvmpipe) is passed.
+  if [ -z "${VK_DRIVER_FILES:-}" ]; then
+    for icd in /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json /usr/share/vulkan/icd.d/nvidia_icd.json; do
+      [ -f "$icd" ] && { export VK_DRIVER_FILES=$icd; break; }
+    done
+  fi
+  if [ -z "${VK_DRIVER_FILES:-}" ]; then
+    icds=$(find /usr/share/vulkan/icd.d /etc/vulkan/icd.d -maxdepth 1 -name '*.json' ! -name 'lvp_icd*' 2>/dev/null | sort | paste -sd:)
+    [ -n "$icds" ] && export VK_DRIVER_FILES=$icds
   fi
   # A degradation reims-vgpu would die at (its DIES list) is recorded and relayed instead, so
   # one app's use of an unmodelled Metal corner costs an inexact frame, not the VM. The census

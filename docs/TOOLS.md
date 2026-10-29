@@ -18,6 +18,7 @@ Common arguments:
 | Script | Usage | What it does |
 |---|---|---|
 | `check-host.sh` | `tools/check-host.sh` | Checks this PC against the requirements in SETUP.md (CPU, RAM, `/dev/shm`, Vulkan GPU, `/dev/vhost-vsock`, `vm.max_map_count`, Rust, meson). Changes nothing. |
+| `omarchy-window.sh` | `tools/omarchy-window.sh [--remove]` | Omarchy/Hyprland: adds a window rule (`~/.config/hypr/vphone-linux.lua`) so the iPhone window floats centred at its own shape instead of being tiled. `--remove` takes it out. |
 | `import-vm.sh` | `tools/import-vm.sh SOURCE NAME` | Copies a vphone-cli VM (a local path or `user@mac:path` over ssh) into `vms/NAME`, sparse, writes its `ecid` file and keeps a `vms/NAME.pristine` copy. |
 
 `../build.sh` builds the submodules and QEMU (see [SETUP.md](SETUP.md#3-build)).

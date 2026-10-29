@@ -25,5 +25,10 @@ if [ -e /usr/lib/liblzfse.a ] && objdump -h /usr/lib/liblzfse.a 2>/dev/null | gr
 fi
 ldconfig -p | grep 'libxml2\.so\.2 ' >/dev/null && pass "libxml2.so.2 (for the Swift toolchain)" \
   || warn "libxml2.so.2 missing; the Swift toolchain needs it (Arch: libxml2-legacy)"
+[ -d "/usr/lib/modules/$(uname -r)/build" ] && pass "kernel headers for $(uname -r)" \
+  || warn "no headers for the running kernel $(uname -r) (linux-apfs-rw builds against them; Arch: $(cat "/usr/lib/modules/$(uname -r)/pkgbase" 2>/dev/null || echo linux)-headers; reboot after a kernel update)"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua" ] && [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/vphone-linux.lua" ]; then
+  echo "  - Hyprland/Omarchy: run tools/omarchy-window.sh so the iPhone window floats phone-shaped"
+fi
 [ $ok = 0 ] && echo "All checks passed." || echo "Fix the items marked ! before building or booting."
 exit $ok

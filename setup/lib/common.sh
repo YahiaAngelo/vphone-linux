@@ -70,6 +70,9 @@ distro_family() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Omarchy (Arch + Hyprland, omarchy.org) says ID=arch; it is recognised by its own files.
+is_omarchy() { have omarchy-version || [ -d /usr/share/omarchy ]; }
+
 require_root() {
   [ "$(id -u)" = 0 ] || die "this step needs root (built-in steps tell you when)"
 }

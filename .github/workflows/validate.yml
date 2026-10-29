@@ -56,6 +56,23 @@ jobs:
       - name: --list renders
         run: ./setup/create-vm.sh --list
 
+  arch-packages:
+    name: Arch/Omarchy package names resolve
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: pacman resolves every package setup.sh installs on Arch
+        run: |
+          pacman -Sy --noconfirm >/dev/null
+          # shellcheck disable=SC1091
+          . setup/lib/packages.sh
+          pacman -Sp --print-format '%n' "${ARCH_PKGS[@]}" linux-headers > /dev/null
+          echo "ok: ${#ARCH_PKGS[@]} packages resolve"
+      - name: lzfse is still in the AUR
+        run: |
+          curl -fsS 'https://aur.archlinux.org/rpc/v5/info?arg[]=lzfse' | grep -q '"resultcount":1'
+
   smoke:
     name: dry-run pipelines
     runs-on: ubuntu-latest

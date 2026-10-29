@@ -16,6 +16,8 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 # shellcheck disable=SC1091
 source "$VSETUP_ROOT/lib/swift.sh"
+# shellcheck disable=SC1091
+source "$VSETUP_ROOT/lib/packages.sh"
 
 VSETUP_ASSUME_YES=${VSETUP_ASSUME_YES:-0}
 VSETUP_PHASE=all
@@ -88,22 +90,40 @@ pkg_feeds() {
         libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev libssl-dev libcurl4-openssl-dev \
         libimobiledevice-dev libusbmuxd-dev libtatsu-dev libarchive-dev ;;
     arch)
-      # lzfse is AUR-only (built below); libxml2-legacy gives the Swift
-      # toolchain its libxml2.so.2; base-devel is for makepkg.
-      sudo pacman -S --needed --noconfirm git base-devel gcc clang lld binutils make cmake \
-        ninja meson pkgconf python python-pillow python-setuptools rsync \
-        glib2 pixman libslirp libssh zstd nettle gnutls gtk3 sdl2-compat bzip2 \
-        libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers vulkan-tools \
-        socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg \
-        libusb libplist libimobiledevice-glue libimobiledevice libusbmuxd libtatsu \
-        libarchive openssl libxml2-legacy libedit sqlite \
-        "$(arch_kernel_headers)"
+      # No -y here: syncing the database without upgrading is a partial upgrade, which Arch
+      # does not support. A stale database fails the download instead (404 on a mirror):
+      # the system is updated by its owner, not as a side effect of this script.
+      sudo pacman -S --needed --noconfirm "${ARCH_PKGS[@]}" "$(arch_kernel_headers)" ||
+        die "pacman could not install the packages. If it failed to retrieve files (404), the
+     package database is out of date: update the system first ($(is_omarchy && echo 'omarchy update, or ')sudo pacman -Syu),
+     reboot if the kernel was updated (linux-apfs-rw builds against the running kernel), then re-run."
       arch_install_lzfse ;;
     *) die "unsupported distro: $(detect_distro) — install the packages from docs/SETUP.md §2/§5.1 manually." ;;
   esac
 }
 
+# Persistent host settings (docs/SETUP.md §2), each written only when missing: vhost_vsock
+# loaded at boot and usable by the user, and vm.max_map_count high enough for reims-vgpu's
+# guest-memory mappings (Arch already ships 1048576).
+host_settings() {
+  if [ "$(cat /proc/sys/vm/max_map_count)" -lt 1048576 ]; then
+    log " Setting vm.max_map_count = 1048576 (/etc/sysctl.d/90-vphone.conf)"
+    echo 'vm.max_map_count = 1048576' | sudo tee /etc/sysctl.d/90-vphone.conf >/dev/null
+    sudo sysctl -q --system
+  fi
+  if ! grep -qsx vhost_vsock /etc/modules-load.d/*.conf; then
+    log " Loading vhost_vsock at boot (/etc/modules-load.d/vhost-vsock.conf)"
+    echo vhost_vsock | sudo tee /etc/modules-load.d/vhost-vsock.conf >/dev/null
+  fi
+  if [ ! -f /etc/udev/rules.d/90-vhost-vsock.rules ]; then
+    echo 'KERNEL=="vhost-vsock", MODE="0666"' | sudo tee /etc/udev/rules.d/90-vhost-vsock.rules >/dev/null
+  fi
+  [ -e /dev/vhost-vsock ] || sudo modprobe vhost_vsock || true
+  if [ -e /dev/vhost-vsock ] && ! [ -w /dev/vhost-vsock ]; then sudo chmod 666 /dev/vhost-vsock; fi
+}
+
 do_phase deps && {
+  if is_omarchy; then log " Omarchy $(omarchy-version 2>/dev/null || true) detected (Arch packages, Hyprland window rule)"; fi
   if [ "$(id -u)" = 0 ]; then
     [ "$(distro_family)" != arch ] || die "run setup.sh as your user (it uses sudo itself); makepkg and swiftly refuse root"
     pkg_feeds
@@ -112,6 +132,8 @@ do_phase deps && {
   fi
 
   # rustup (reims-vgpu) — its own pins come from rust-toolchain.toml
+  # shellcheck disable=SC1091  # rustup's env file, outside this checkout
+  if ! have cargo && [ -r "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
   if ! have cargo; then
     log " Installing rustup"
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
@@ -126,15 +148,11 @@ do_phase deps && {
   # installed with swiftly and called by its full path (setup/lib/swift.sh). On Arch it
   # uses swiftly's ubi9 build plus ncurses links inside the toolchain.
   ensure_swift
-  # sysctl for reims-vgpu's guest-memory mappings
-  if [ "$(cat /proc/sys/vm/max_map_count)" -lt 1048576 ]; then
-    warn "vm.max_map_count is $(cat /proc/sys/vm/max_map_count); add"
-    warn "  'vm.max_map_count = 1048576' to /etc/sysctl.d/vphone.conf  (sudo)"
+  if confirm "Set the vhost_vsock and vm.max_map_count host settings with sudo (only those missing)?"; then
+    host_settings
   fi
-  # vhost-vsock is the default control channel
-  if ! [ -e /dev/vhost-vsock ] && [ "$(id -u)" = 0 ]; then
-    modprobe vhost_vsock || true
-  fi
+  [ "$(cat /proc/sys/vm/max_map_count)" -ge 1048576 ] ||
+    warn "vm.max_map_count is $(cat /proc/sys/vm/max_map_count): set 1048576 (docs/SETUP.md §2)"
   [ -e /dev/vhost-vsock ] || warn "/dev/vhost-vsock missing: boot with VSOCK=uds, or load vhost_vsock"
 }
 
@@ -248,5 +266,12 @@ do_phase release && {
 
 # The GPU driver needs a stock cloudOS restore (~20-30 min); create-vm.sh does it in its
 # gpu-driver step, once, after downloading the cloudOS IPSW.
+# Omarchy / Hyprland: float the iPhone window at its own shape instead of tiling it.
+if do_phase deps && [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua" ] &&
+   [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/vphone-linux.lua" ] &&
+   confirm "Hyprland$(is_omarchy && echo ' (Omarchy)') found: add a window rule so the iPhone window floats phone-shaped?"; then
+  echo y | "$VSETUP_SRC/tools/omarchy-window.sh" || warn "the window rule was not installed: run tools/omarchy-window.sh"
+fi
+
 log "Setup complete: binaries under $VSETUP_SRC, ROMs under $VSETUP_RELEASE."
 log "Next: ./create-vm.sh to pick the device and the iOS version and build the VM."
