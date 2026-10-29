@@ -16,10 +16,14 @@ what is different and what to set up once.
 | USB access during a restore | libirecovery's `uaccess` rule (needs a logind seat) | `setup/data/70-vphone-apple-usb.rules`, installed by `setup.sh` (WSL has no seat) |
 | CPU placement | `run-vphone.sh` pins QEMU to the P-cores (`/sys/devices/cpu_core`) | not possible: Windows schedules WSL's vCPUs |
 
-**Why lavapipe.** WSL2 has no native Vulkan driver for the host GPU. The only GPU-backed option is
-Mesa's `dzn` (Vulkan on Direct3D 12), which cannot import guest RAM by pointer
-(`VK_EXT_external_memory_host`), and WSL has no `/dev/udmabuf` for the dma-buf fallback. reims-vgpu
-needs one of the two for every guest surface. lavapipe supports the pointer import, so it works,
+**Why lavapipe.** WSL2 has no native Vulkan driver for the host GPU (NVIDIA's WSL driver ships
+CUDA and Direct3D 12, not Vulkan). The only GPU-backed option is Mesa's `dzn` (Vulkan on
+Direct3D 12; Ubuntu's Mesa does not build it). reims-vgpu imports guest RAM by pointer
+(`VK_EXT_external_memory_host`) or, failing that, as dma-bufs from `/dev/udmabuf`, for every guest
+surface. Tested with Mesa 26.0.8's dzn on an RTX 4080 SUPER: Vulkan 1.2, timeline semaphores,
+swapchain and `VK_KHR_external_memory_fd` are there, but not `VK_EXT_external_memory_host` (dzn
+offers it only with `ID3D12Device13::OpenExistingHeapFromAddress1`, which WSL's D3D12 does not
+have) nor dma-buf import, and WSL has no udmabuf. lavapipe supports the pointer import, so it works,
 but it draws on the CPU: expect lower frame rates than on a GPU, and fewer cores left for the
 guest. `run-vphone.sh` picks lavapipe on WSL and keeps it to 4 threads (`LP_NUM_THREADS`). Set
 `VK_DRIVER_FILES` yourself to try another ICD.
@@ -83,6 +87,11 @@ Scale 1 is the better choice on WSL: lavapipe's cost grows with the pixel count.
   VM with `tools/dfu-stop.sh`, and for a restore zero `nvram.bin` and `SEPStorage` again, then
   re-run `create-vm.sh`.
 
-Status: setup, the restore, the CFW install and the first boot's start (Metal on lavapipe in a
-WSLg window, vphoned answering) were run on WSL2 (Windows 11, Ubuntu 26.04, i7-14700K). The
-first boot's migration has not yet completed on WSL.
+- **`guest-1x-logo.py` fails with errno 30** (`Creating a temporary file via mktemp failed`) at
+  the end of a scale-1 first boot: the system volume stayed read-only after the tool's remount job.
+  Only the boot logo's size is affected; the VM is usable. `create-vm.sh` then reports the
+  `booted` step as failed; `echo booted >> <vm>/.create-state` marks it done.
+
+Status: the whole create flow, to an unlocked iOS 26.6.2 home screen at 1x (Metal on lavapipe in
+a WSLg window), was run on WSL2 (Windows 11, Ubuntu 26.04, i7-14700K). The first boot's migration
+needed one restart after the watchdog panic above.

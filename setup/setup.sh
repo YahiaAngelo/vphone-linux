@@ -130,8 +130,12 @@ do_phase deps && {
   if is_wsl && [ ! -e /etc/udev/rules.d/90-vhost-vsock.rules ]; then
     echo vhost_vsock | sudo tee /etc/modules-load.d/vhost-vsock.conf >/dev/null
     echo 'KERNEL=="vhost-vsock", MODE="0666"' | sudo tee /etc/udev/rules.d/90-vhost-vsock.rules >/dev/null
-    sudo udevadm control --reload && sudo udevadm trigger --sysname-match=vhost-vsock --action=change ||
-      warn "could not apply the vhost-vsock udev rule"
+  fi
+  # /dev/vhost-vsock can exist before its module loads (a static node, root:kvm 0660): load the
+  # module so udev creates the real node with the rule's mode.
+  if is_wsl && ! grep -q '^vhost_vsock ' /proc/modules; then
+    sudo udevadm control --reload && sudo modprobe vhost_vsock && sudo udevadm settle ||
+      warn "could not load vhost_vsock"
   fi
   # WSL: no logind seat, so libirecovery's uaccess rule never opens the guest's DFU/recovery/
   # restore USB device to the user and recovery-probe times out. Open Apple's 05ac:12xx instead.
