@@ -18,5 +18,12 @@ m=$(cat /proc/sys/vm/max_map_count)
 [ "$m" -ge 1048576 ] && pass "vm.max_map_count = $m" || warn "vm.max_map_count = $m; set 1048576 or more (docs/SETUP.md)"
 command -v cargo >/dev/null && pass "Rust (cargo)" || warn "Rust not installed (https://rustup.rs)"
 command -v ninja >/dev/null && command -v meson >/dev/null && pass "meson and ninja" || warn "meson or ninja missing"
+[ -e /usr/include/lzfse.h ] || [ -e /usr/local/include/lzfse.h ] && pass "lzfse" \
+  || warn "lzfse missing (Fedora: lzfse-devel, Debian: liblzfse-dev, Arch: AUR lzfse)"
+if [ -e /usr/lib/liblzfse.a ] && objdump -h /usr/lib/liblzfse.a 2>/dev/null | grep '\.gnu\.lto_' >/dev/null; then
+  warn "liblzfse.a was built with LTO; Swift cannot link it (re-run ./setup/setup.sh deps to rebuild it)"
+fi
+ldconfig -p | grep 'libxml2\.so\.2 ' >/dev/null && pass "libxml2.so.2 (for the Swift toolchain)" \
+  || warn "libxml2.so.2 missing; the Swift toolchain needs it (Arch: libxml2-legacy)"
 [ $ok = 0 ] && echo "All checks passed." || echo "Fix the items marked ! before building or booting."
 exit $ok

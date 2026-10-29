@@ -28,6 +28,7 @@ linux-create/Sources/
 /guest-resources
 /.build/
 /vphone-cli/
+/cpu-tree/
 /ipsws/
 /drivers/
 

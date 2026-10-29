@@ -198,19 +198,34 @@ do_firmware() {
   log "  firmware: $IOS_LOCAL + ${CLOUDOS_LOCAL:-cloudOS $PAIR_CLOUDOS}"
 }
 
+# The GPU driver's cryptex keys are not public (Apple answers 403 for the 23E5207q), so it
+# comes from a stock cloudOS restore. Look in the usual places; GPU_DRIVER_BUNDLE= wins.
+find_gpu_bundle() {
+  local cand
+  for cand in "${GPU_DRIVER_BUNDLE:-}" "$VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle" \
+              "$CACHE/AppleParavirtGPUMetalIOGPUFamily.bundle"; do
+    [ -n "$cand" ] && [ -d "$cand" ] && { printf '%s\n' "$cand"; return 0; }
+  done
+  return 1
+}
+
+# Extract the GPU driver once (shared by every VM): tools/gpu-driver-from-cloudos.sh restores
+# the stock cloudOS just downloaded into a temporary VM (~20-30 min) and keeps only the driver,
+# in $VSETUP_RELEASE. It needs the same USB helpers as the restore below.
+do_gpu_driver() {
+  if find_gpu_bundle >/dev/null; then log "  GPU driver: $(find_gpu_bundle)"; return 0; fi
+  [ "$DRY" = 1 ] || [ -s "$CLOUDOS_LOCAL" ] ||
+    die "the cloudOS IPSW is missing ($CLOUDOS_LOCAL); pass CLOUDOS_IPSW_URL= or GPU_DRIVER_BUNDLE="
+  log "  Extracting the GPU driver from a stock cloudOS restore (once; about 20-30 minutes)"
+  usb_helpers
+  dry env VC="$VC" "$T/gpu-driver-from-cloudos.sh" "$CLOUDOS_LOCAL" "$VSETUP_RELEASE"
+}
+
 do_prepare() {
-  # The GPU driver's cryptex keys are not public (Apple answers 403 for the 23E5207q), so it
-  # comes from a stock cloudOS restore. Look in the usual places; GPU_DRIVER_BUNDLE= wins.
-  local gpu_bundle=${GPU_DRIVER_BUNDLE:-} cand
-  if [ -z "$gpu_bundle" ]; then
-    for cand in "$VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle" \
-                "$CACHE/AppleParavirtGPUMetalIOGPUFamily.bundle"; do
-      [ -d "$cand" ] && { gpu_bundle=$cand; break; }
-    done
-  fi
-  [ "$DRY" = 1 ] || [ -d "$gpu_bundle" ] || die "GPU driver bundle not found (SETUP.md §5.4). Do one of:
-     • sudo $T/gpu-driver-from-cloudos.sh (restores a stock cloudOS once and extracts it),
-     • or copy one to $VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle,
+  local gpu_bundle
+  gpu_bundle=$(find_gpu_bundle) || gpu_bundle=${GPU_DRIVER_BUNDLE:-$VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle}
+  [ "$DRY" = 1 ] || [ -d "$gpu_bundle" ] || die "GPU driver bundle not found. Re-run ./setup/create-vm.sh (its gpu-driver step extracts it), or
+     • copy one to $VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle,
      • or set GPU_DRIVER_BUNDLE=/path/to/AppleParavirtGPUMetalIOGPUFamily.bundle"
   # An existing restore tree is a prepare that did not finish (or a patch that failed part way,
   # which leaves files patched in place with no originals kept): fw prepare refuses to overwrite
@@ -322,6 +337,7 @@ do_cfw() {
 step sanity   do_sanity
 step bundle   do_bundle
 step firmware do_firmware
+step gpu-driver do_gpu_driver
 step prepare  do_prepare
 # A failed patch leaves the tree part patched: prepare runs again before the next patch.
 if ! done_step patch && done_step prepare && [ -e "$VM/.patch-started" ]; then

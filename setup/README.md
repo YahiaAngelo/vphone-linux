@@ -68,7 +68,8 @@ iPhone11,6 (iPhone XS Max)
   iOS 18.7.2 | ... | needs-mac-builder (refused here with instructions)
 ```
 
-Then it runs the whole Linux create flow (`fw prepare` + `fw patch`, the DFU
+Then it runs the whole Linux create flow (the GPU driver's one-time extraction from a stock
+cloudOS restore, `fw prepare` + `fw patch`, the DFU
 restore, the SSH-ramdisk CFW install, the snapshot flip, the first boot and
 unlock) with one state file per VM, so re-runs resume from the step that
 failed. QEMU is started exactly once (the "first boot" step) and never

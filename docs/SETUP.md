@@ -70,6 +70,24 @@ sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson
   libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel
 ```
 
+On Arch Linux (and CachyOS, EndeavourOS, Manjaro...):
+
+```sh
+sudo pacman -S --needed git base-devel gcc clang lld binutils make cmake ninja meson pkgconf \
+  python python-pillow python-setuptools rsync glib2 pixman libslirp libssh zstd nettle gnutls \
+  gtk3 sdl2-compat bzip2 libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers \
+  vulkan-tools socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg libusb libplist \
+  libimobiledevice-glue libimobiledevice libusbmuxd libtatsu libarchive openssl \
+  libxml2-legacy libedit sqlite "$(cat /usr/lib/modules/$(uname -r)/pkgbase)-headers"
+git clone https://aur.archlinux.org/lzfse.git /tmp/lzfse
+echo "options+=('!lto')" >> /tmp/lzfse/PKGBUILD && (cd /tmp/lzfse && makepkg -sif)
+```
+
+`lzfse` is only in the AUR. Build it with LTO off as above (not with yay/paru): Arch's default LTO
+fills its static `liblzfse.a` with GCC's intermediate code, which the Swift toolchain's linker cannot
+read (`undefined symbol: lzfse_encode_buffer`). `libxml2-legacy` provides `libxml2.so.2`, which the Swift toolchain
+(`swift build`, `lld`) needs; Arch's own `libxml2` is a newer, incompatible version.
+
 On other distributions, install the same packages under their names there. `lld` provides
 `lld-link` and `ld.lld`, which reims-vgpu's option ROM is linked with (`reims-vgpu/firmware/Makefile`). (Checked in a clean
 Fedora 44 container: they all install, every library the build links against is then present, and the GPU library's SDL window code configures.)
@@ -77,10 +95,11 @@ Fedora 44 container: they all install, every library the build links against is 
 Then:
 
 - **Rust**, with [rustup](https://rustup.rs).
-- **Swift 6.4.1** for Linux, with [swiftly](https://www.swift.org/install/linux/) (tested with
-  `swift-6.4.1-RELEASE`). It builds vphone-cli's firmware tools.
-  On Arch-based distros the toolchain may also need an ncurses compatibility library
-  (e.g. `libncurses.so.6`); `setup.sh` lists any libraries it is missing.
+- **Swift 6.4.1** for Linux (the version in `linux-create/.swift-version`). You don't need to install
+  it yourself: `linux-create/build.sh` installs [swiftly](https://www.swift.org/install/linux/) and
+  this toolchain when it's missing, and calls it by its full path. Nothing is added to your shell's
+  PATH. On distros swiftly doesn't support (Arch and its derivatives), it uses the `ubi9` build and
+  links Arch's `libncursesw.so.6` into the toolchain as the `libncurses.so.6` it expects.
 - **rcodesign**, which signs app bundles while the VM is created: `cargo install apple-codesign --locked`.
 
 Set two system options. They are permanent, so this is needed only once:
@@ -119,12 +138,12 @@ The rest of this step builds the tools that create the VM.
 **vphone-cli's firmware tools, for Linux** (`linux-create/`, about 5 minutes):
 
 ```sh
-git clone https://github.com/Lakr233/vphone-cli.git && git -C vphone-cli checkout 2.12.1
-cd linux-create
-VPHONE_CLI=../vphone-cli ./sync-sources.sh
-swift build --build-system swiftbuild --scratch-path .build/out
-cd ..
+linux-create/build.sh      # fetches vphone-cli, installs Swift if needed, syncs and builds
+linux-create/vphone-cli --help
 ```
+
+`linux-create/vphone-cli` runs the built tool (it builds it first if needed); use it as
+`sudo linux-create/vphone-cli ...` for the steps that need root.
 
 **vphone-cli's release files.** Download
 [VPhone-2.12.1.zip](https://github.com/Lakr233/vphone-cli/releases/download/2.12.1/VPhone-2.12.1.zip)

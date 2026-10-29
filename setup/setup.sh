@@ -14,6 +14,8 @@
 set -Eeuo pipefail
 # shellcheck disable=SC1091  # this checkout's own lib/common.sh, resolved at run time
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
+# shellcheck disable=SC1091
+source "$VSETUP_ROOT/lib/swift.sh"
 
 VSETUP_ASSUME_YES=${VSETUP_ASSUME_YES:-0}
 VSETUP_PHASE=all
@@ -30,46 +32,83 @@ done
 do_phase() { [ "$VSETUP_PHASE" = "$1" ] || [ "$VSETUP_PHASE" = all ]; }
 
 # ---------------------------------------------------------------- 1. deps ---
+# The headers package for the running kernel (linux, linux-lts, linux-zen, a
+# custom kernel's own -headers package...), for linux-apfs-rw.
+arch_kernel_headers() {
+  local base; base=/usr/lib/modules/$(uname -r)/pkgbase
+  if [ -r "$base" ]; then echo "$(cat "$base")-headers"; else echo linux-headers; fi
+}
+# lzfse (QEMU's --enable-lzfse, and the Swift build) is only in the AUR, and it
+# ships just a static liblzfse.a. Arch's makepkg.conf turns on LTO, which fills
+# that archive with GCC's intermediate code instead of machine code: GCC links
+# it, but the Swift toolchain's linker (lld/gold) cannot, so vphone-cli fails
+# with undefined lzfse_encode_buffer. Build it here with LTO off (an AUR helper
+# would use the LTO default), and rebuild an installed copy that has LTO in it.
+lzfse_has_lto() { objdump -h /usr/lib/liblzfse.a 2>/dev/null | grep '\.gnu\.lto_' >/dev/null; }
+arch_install_lzfse() {
+  if pacman -Q lzfse >/dev/null 2>&1 && ! lzfse_has_lto; then return 0; fi
+  if pacman -Q lzfse >/dev/null 2>&1; then
+    log " Rebuilding lzfse without LTO (the installed liblzfse.a has GCC LTO code)"
+  else
+    log " Building lzfse from the AUR, without LTO"
+  fi
+  local d; d=$(mktemp -d)
+  git clone --depth 1 https://aur.archlinux.org/lzfse.git "$d/lzfse"
+  printf "\n# vphone-linux: plain machine code in liblzfse.a, for the Swift toolchain's linker\noptions+=('!lto')\n" \
+    >> "$d/lzfse/PKGBUILD"
+  ( cd "$d/lzfse" && makepkg -sif --noconfirm )
+  rm -rf "$d"
+  ! lzfse_has_lto || die "liblzfse.a still has LTO code; rebuild the lzfse package with options=('!lto')"
+}
+
 pkg_feeds() {
-  local distro; distro=${1%%:*}
-  log " Installing splash-screen packages for $distro"
-  case $distro in
+  local family; family=$(distro_family)
+  log " Installing system packages for $family ($(detect_distro))"
+  case $family in
     fedora)
       sudo dnf install -y git gcc gcc-c++ clang lld binutils make cmake ninja-build meson \
-        python3 python3-pillow glib2-devel pixman-devel lzfse-devel libslirp-devel \
+        python3 python3-pillow rsync glib2-devel pixman-devel lzfse-devel libslirp-devel \
         libssh-devel libzstd-devel nettle-devel gnutls-devel gtk3-devel \
-        sdl2-compat-devel bzip2-devel libX11-devel wayland-devel libxkbcommon-devel \
+        sdl2-compat-devel bzip2-devel libX11-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel \
         vulkan-loader vulkan-loader-devel vulkan-tools \
-        socat gdb perf \
+        socat gdb perf unzip curl zstd \
         usbip fuse-sshfs fuse3 7zip kernel-devel \
-        libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel ;;
-    ubuntu|debian|linuxmint)
+        libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel \
+        libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel ;;
+    debian)
       sudo apt-get update
       sudo apt-get install -y git gcc g++ clang lld binutils make cmake ninja-build meson \
-        python3 python3-pil python3-setuptools pkg-config \
+        python3 python3-pil python3-setuptools pkg-config rsync unzip curl zstd \
         libglib2.0-dev libpixman-1-dev liblzfse-dev libslirp-dev libssh-dev \
         libzstd-dev libnettle-dev libgnutls28-dev libgtk-3-dev libsdl2-dev \
-        libbzip2-dev libx11-dev libxkbcommon-dev wayland libwayland-dev \
+        libbz2-dev libx11-dev libxss-dev libxkbcommon-dev libwayland-dev \
         libvulkan-dev mesa-vulkan-drivers vulkan-tools \
         socat gdb linux-tools-generic \
         usbip sshfs fuse3 p7zip-full linux-headers-generic \
-        libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev libssl-dev libcurl4-openssl-dev ;;
-    arch|cachyos|manjaro)
-      sudo pacman -S --needed --noconfirm git gcc clang lld binutils make cmake ninja meson \
-        python python-pillow glib2 pixman lzfse libslirp libssh zstd nettle gnutls gtk3 \
-        sdl2 bzip2 libx11 libxkbcommon wayland vulkan-icd-loader vulkan-tools \
-        socat gdb perf usbip sshfs fuse3 p7zip linux-headers \
-        libusb libplist openssl curl ;;
-    *) die "unsupported distro: $1 — install the packages from docs/SETUP.md §2/§5.1 manually." ;;
+        libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev libssl-dev libcurl4-openssl-dev \
+        libimobiledevice-dev libusbmuxd-dev libtatsu-dev libarchive-dev ;;
+    arch)
+      # lzfse is AUR-only (built below); libxml2-legacy gives the Swift
+      # toolchain its libxml2.so.2; base-devel is for makepkg.
+      sudo pacman -S --needed --noconfirm git base-devel gcc clang lld binutils make cmake \
+        ninja meson pkgconf python python-pillow python-setuptools rsync \
+        glib2 pixman libslirp libssh zstd nettle gnutls gtk3 sdl2-compat bzip2 \
+        libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers vulkan-tools \
+        socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg \
+        libusb libplist libimobiledevice-glue libimobiledevice libusbmuxd libtatsu \
+        libarchive openssl libxml2-legacy libedit sqlite \
+        "$(arch_kernel_headers)"
+      arch_install_lzfse ;;
+    *) die "unsupported distro: $(detect_distro) — install the packages from docs/SETUP.md §2/§5.1 manually." ;;
   esac
 }
 
 do_phase deps && {
   if [ "$(id -u)" = 0 ]; then
+    [ "$(distro_family)" != arch ] || die "run setup.sh as your user (it uses sudo itself); makepkg and swiftly refuse root"
     pkg_feeds
   else
-    confirm "Install the system packages with sudo? (chooser: $(detect_distro))" &&
-      pkg_feeds "$(detect_distro)"
+    confirm "Install the system packages with sudo? ($(detect_distro))" && pkg_feeds
   fi
 
   # rustup (reims-vgpu) — its own pins come from rust-toolchain.toml
@@ -83,40 +122,10 @@ do_phase deps && {
     log " Installing rcodesign (apple-codesign)"
     cargo install apple-codesign --locked
   fi
-  # swiftly (Swift for the vphone-cli Linux build). swift.org ships one
-  # tarball per CPU (swiftly-x86_64 / swiftly-aarch64); the old arch-less
-  # swiftly.tar.gz now 404s.
-  if ! have swift; then
-    log " Installing swiftly + Swift 6.4.1"
-    swiftly_tgz="swiftly-$(uname -m).tar.gz"
-    swiftly_tmp=$(mktemp -d)
-    curl -fsSL -o "$swiftly_tmp/$swiftly_tgz" "https://download.swift.org/swiftly/linux/$swiftly_tgz"
-    tar -zxf "$swiftly_tmp/$swiftly_tgz" -C "$swiftly_tmp"
-    # init installs swiftly itself into ~/.local/share/swiftly; the toolchain
-    # comes next, pinned, instead of init's "latest".
-    "$swiftly_tmp/swiftly" init --assume-yes --skip-install --quiet-shell-followup
-    rm -rf "$swiftly_tmp"
-    # shellcheck disable=SC1091  # swiftly's env file, outside this checkout
-    . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
-    hash -r
-    swiftly install --assume-yes --use 6.4.1
-    hash -r
-  fi
-  # Swift's Linux toolchains are built for Ubuntu/RHEL; on other distros
-  # (Arch in particular) some of their libraries, usually ncurses, can be
-  # missing. List them instead of letting the build fail later.
-  swift_tc="${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/toolchains/6.4.1/usr/bin"
-  if [ -d "$swift_tc" ] && have ldd; then
-    swift_missing=$(ldd "$swift_tc"/* 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ' || true)
-    if [ -n "$swift_missing" ]; then
-      warn "Swift toolchain is missing libraries: $swift_missing"
-      case $(detect_distro) in
-        arch*|cachyos*|manjaro*)
-          warn "  on Arch, install an ncurses compatibility package (AUR: ncurses5-compat-libs)"
-          warn "  or link libncursesw.so.6 -> libncurses.so.6 / libtinfo.so.6 as needed" ;;
-      esac
-    fi
-  fi
+  # Swift for the vphone-cli Linux build: the version in linux-create/.swift-version,
+  # installed with swiftly and called by its full path (setup/lib/swift.sh). On Arch it
+  # uses swiftly's ubi9 build plus ncurses links inside the toolchain.
+  ensure_swift
   # sysctl for reims-vgpu's guest-memory mappings
   if [ "$(cat /proc/sys/vm/max_map_count)" -lt 1048576 ]; then
     warn "vm.max_map_count is $(cat /proc/sys/vm/max_map_count); add"
@@ -173,9 +182,7 @@ build_creator() {
   if [ ! -d "$src/.git" ]; then
     git clone --depth 1 --branch "$VPHONE_CLI_PUBLIC" "$VPHONE_CLI_REPO" "$src"
   fi
-  ( cd "$VSETUP_SRC/linux-create"
-    VPHONE_CLI="$src" ./sync-sources.sh
-    swift build --build-system swiftbuild --scratch-path .build/out )
+  VPHONE_CLI="$src" "$VSETUP_SRC/linux-create/build.sh"
 }
 build_usbmuxd() { "$VSETUP_SRC/tools/build-usbmuxd-32k.sh"; }
 # linux-apfs-rw with the iOS 27 volume features accepted (patches/linux-apfs-rw-ios27.patch):
@@ -199,13 +206,20 @@ build_apfs() {
   make -C "$dir"
 }
 
+# An lzfse built with Arch's default LTO cannot be linked by Swift: rebuild it first
+# (needs sudo), so `./setup.sh build` alone is enough after pulling this fix.
+if do_phase build && [ "$(distro_family)" = arch ] && lzfse_has_lto; then
+  arch_install_lzfse
+fi
 do_phase build && for step in reims qemu creator usbmuxd apfs; do
-  "build_$step"
+  # The C/Rust builds use the system clang/lld, never the Swift toolchain's copies.
+  PATH=$(path_without_swiftly) "build_$step"
 done
 
 # ------------------------------------------------------------- 4. release ---
 do_phase release && {
   rel="$VSETUP_RELEASE/app"
+  mkdir -p "$rel"
   log " Setting up the vphone-cli $VPHONE_CLI_PUBLIC release bundle (ROMs + guest resources)"
   zip="$VSETUP_RELEASE/VPhone-$VPHONE_CLI_PUBLIC.zip"
   if [ ! -d "$rel/VPhone.bundle/Contents/Resources/OpenAVB" ]; then
@@ -232,15 +246,7 @@ do_phase release && {
     cp "$r/OpenSEP/OpenSEP.bin" OpenSEP/OpenSEP.bin 2>/dev/null || cp "$r/OpenSEP.bin" OpenSEP/OpenSEP.bin )
 }
 
-# ---- GPU driver: needs a temporary stock cloudOS restore; interactive. ----
-if [ "$VSETUP_PHASE" = all ] || [ "$VSETUP_PHASE" = release ]; then
-  [ -d "$VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle" ] || {
-    log "The paravirt GPU driver bundle is not extracted yet."
-    log "Run tools/gpu-driver-from-cloudos.sh (restores a stock cloudOS into a scratch"
-    log "bundle once, then extracts it). Headless and safe; ~1 h. Or skip it: a VM works"
-    log "headless without it, but no graphics. Run:  sudo $VSETUP_SRC/tools/gpu-driver-from-cloudos.sh"
-  }
-fi
-
+# The GPU driver needs a stock cloudOS restore (~20-30 min); create-vm.sh does it in its
+# gpu-driver step, once, after downloading the cloudOS IPSW.
 log "Setup complete: binaries under $VSETUP_SRC, ROMs under $VSETUP_RELEASE."
 log "Next: ./create-vm.sh to pick the device and the iOS version and build the VM."
