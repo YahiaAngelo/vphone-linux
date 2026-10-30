@@ -34,6 +34,12 @@ if [ -e /usr/lib/liblzfse.a ] && objdump -h /usr/lib/liblzfse.a 2>/dev/null | gr
 fi
 
 cd "$here"
+# ArchiveKit links Shims/libarchive/lib/libarchive.so (Package.swift): point it at this distro's
+# libarchive.so.13 (Fedora /usr/lib64, Debian/Ubuntu /usr/lib/x86_64-linux-gnu, Arch /usr/lib).
+la=$(pkg-config --variable=libdir libarchive 2>/dev/null)/libarchive.so.13
+[ -e "$la" ] || die "libarchive.so.13 not found (install libarchive-devel / libarchive-dev / libarchive)"
+mkdir -p Shims/libarchive/lib
+ln -sfn "$la" Shims/libarchive/lib/libarchive.so
 VPHONE_CLI=$src ./sync-sources.sh
 log "Building with Swift $VPHONE_SWIFT_VERSION ($(swift_bin))"
 # On Arch, link with the toolchain's lld: Swift's default on Linux is gold, which Arch's

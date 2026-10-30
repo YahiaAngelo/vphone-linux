@@ -89,6 +89,20 @@ if [ "${GFX:-0}" = 1 ]; then
       [ -f "$icd" ] && { export VK_DRIVER_FILES=$icd; break; }
     done
   fi
+  if [ -z "${VK_DRIVER_FILES:-}" ] && grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+    # WSL2 has no native Vulkan driver for the host GPU, only Mesa's dzn (Vulkan on D3D12),
+    # which cannot import guest RAM by pointer (VK_EXT_external_memory_host) and has no udmabuf
+    # fallback. lavapipe can: it renders on the CPU, slower but complete. Present goes through
+    # WSLg's Wayland/X server. Set VK_DRIVER_FILES to try another ICD. (A VM's virtio-gpu Venus
+    # lacks the same extension: there too, VK_DRIVER_FILES=.../lvp_icd.json.)
+    for icd in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.x86_64.json; do
+      [ -f "$icd" ] && { export VK_DRIVER_FILES=$icd; break; }
+    done
+    # lavapipe's rasterizer threads compete with the vCPUs, and WSL cannot keep QEMU on the
+    # performance cores (no /sys/devices/cpu_core): a guest starved of CPU trips iOS's first-boot
+    # watchdog ("datamigrator plugin SpringBoard.migrator hang"). Keep lavapipe to a few threads.
+    export LP_NUM_THREADS=${LP_NUM_THREADS:-4}
+  fi
   # A degradation reims-vgpu would die at (its DIES list) is recorded and relayed instead, so
   # one app's use of an unmodelled Metal corner costs an inexact frame, not the VM. The census
   # (census-<pid>.json) lists every kind met. REIMS_VGPU_CENSUS_DIR= (empty) restores deaths.

@@ -56,22 +56,50 @@ jobs:
       - name: --list renders
         run: ./setup/create-vm.sh --list
 
-  arch-packages:
-    name: Arch/Omarchy package names resolve
+  packages:
+    name: package names resolve (${{ matrix.image }})
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'fedora:43',        family: fedora }
+          - { image: 'fedora:44',        family: fedora }
+          - { image: 'debian:13',        family: debian }
+          - { image: 'ubuntu:25.10',     family: debian }
+          - { image: 'ubuntu:26.04',     family: debian }
+          - { image: 'archlinux:latest', family: arch }
     steps:
       - uses: actions/checkout@v4
-      - name: pacman resolves every package setup.sh installs on Arch
+      # One unknown name makes dnf/apt install nothing at all: resolve every name setup.sh asks
+      # for, installing nothing (dnf --assumeno, apt-get --simulate, pacman -Sp).
+      - name: every package setup.sh installs resolves
+        shell: bash
+        env:
+          FAMILY: ${{ matrix.family }}
+          IMAGE: ${{ matrix.image }}
         run: |
-          pacman -Sy --noconfirm >/dev/null
           # shellcheck disable=SC1091
           . setup/lib/packages.sh
-          pacman -Sp --print-format '%n' "${ARCH_PKGS[@]}" linux-headers > /dev/null
-          echo "ok: ${#ARCH_PKGS[@]} packages resolve"
-      - name: lzfse is still in the AUR
-        run: |
-          curl -fsS 'https://aur.archlinux.org/rpc/v5/info?arg[]=lzfse' | grep -q '"resultcount":1'
+          case $FAMILY in
+            fedora)
+              dnf -q makecache >/dev/null
+              out=$(dnf install --assumeno "${FEDORA_PKGS[@]}" kernel-devel 2>&1 || true)
+              if grep -iE 'No match for argument|Unable to find a match' <<<"$out"; then exit 1; fi ;;
+            debian)
+              apt-get update -qq >/dev/null
+              missing=()
+              for p in "${DEBIAN_PKGS[@]}"; do [ -n "$(apt-cache madison "$p")" ] || missing+=("$p"); done
+              if [ ${#missing[@]} -gt 0 ]; then echo "missing: ${missing[*]}"; exit 1; fi
+              x=linux-tools-generic; [ -n "$(apt-cache madison usbip)" ] && x=usbip
+              apt-get install --simulate -qq "${DEBIAN_PKGS[@]}" "$x" linux-headers-generic >/dev/null ;;
+            arch)
+              pacman -Sy --noconfirm >/dev/null
+              pacman -Sp --print-format '%n' "${ARCH_PKGS[@]}" linux-headers >/dev/null
+              curl -fsS 'https://aur.archlinux.org/rpc/v5/info?arg[]=lzfse' | grep -q '"resultcount":1' ;;
+          esac
+          echo "ok: every package resolves on $IMAGE"
 
   smoke:
     name: dry-run pipelines

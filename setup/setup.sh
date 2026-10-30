@@ -68,27 +68,24 @@ pkg_feeds() {
   log " Installing system packages for $family ($(detect_distro))"
   case $family in
     fedora)
-      sudo dnf install -y git gcc gcc-c++ clang lld binutils make cmake ninja-build meson \
-        python3 python3-pillow rsync glib2-devel pixman-devel lzfse-devel libslirp-devel \
-        libssh-devel libzstd-devel nettle-devel gnutls-devel gtk3-devel \
-        sdl2-compat-devel bzip2-devel libX11-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel \
-        vulkan-loader vulkan-loader-devel vulkan-tools \
-        socat gdb perf unzip curl zstd \
-        usbip fuse-sshfs fuse3 7zip kernel-devel \
-        libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel \
-        libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel ;;
+      sudo dnf install -y "${FEDORA_PKGS[@]}" ;;
     debian)
       sudo apt-get update
-      sudo apt-get install -y git gcc g++ clang lld binutils make cmake ninja-build meson \
-        python3 python3-pil python3-setuptools pkg-config rsync unzip curl zstd \
-        libglib2.0-dev libpixman-1-dev liblzfse-dev libslirp-dev libssh-dev \
-        libzstd-dev libnettle-dev libgnutls28-dev libgtk-3-dev libsdl2-dev \
-        libbz2-dev libx11-dev libxss-dev libxkbcommon-dev libwayland-dev \
-        libvulkan-dev mesa-vulkan-drivers vulkan-tools \
-        socat gdb linux-tools-generic \
-        usbip sshfs fuse3 p7zip-full linux-headers-generic \
-        libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev libssl-dev libcurl4-openssl-dev \
-        libimobiledevice-dev libusbmuxd-dev libtatsu-dev libarchive-dev ;;
+      local extra=() missing=() p
+      for p in "${DEBIAN_PKGS[@]}"; do [ -n "$(apt-cache madison "$p" 2>/dev/null)" ] || missing+=("$p"); done
+      [ ${#missing[@]} = 0 ] || die "this release has no ${missing[*]}: vphone-cli's restore code links
+     libimobiledevice 1.4, libimobiledevice-glue and libtatsu. Use Debian 13+ or Ubuntu 25.04+."
+      # Debian packages usbip; Ubuntu ships it in linux-tools (linked below).
+      if [ -n "$(apt-cache madison usbip 2>/dev/null)" ]; then extra+=(usbip); else extra+=(linux-tools-generic); fi
+      # WSL: tools/wsl-kernel-tree.sh builds Microsoft's kernel source instead of headers.
+      if is_wsl; then extra+=(gcc-13 cpio dwarves); else extra+=(linux-headers-generic); fi
+      sudo apt-get install -y "${DEBIAN_PKGS[@]}" "${extra[@]}"
+      # Ubuntu's /usr/bin/usbip only runs linux-tools for the running kernel, which is never
+      # installed on WSL or a custom kernel: link the newest one instead.
+      usbip version >/dev/null 2>&1 || {
+        local u; u=$(find /usr/lib/linux-tools -name usbip -path '*/usbip' 2>/dev/null | sort -V | tail -1)
+        if [ -n "$u" ]; then sudo ln -sf "$u" /usr/local/bin/usbip; fi
+      } ;;
     arch)
       # No -y here: syncing the database without upgrading is a partial upgrade, which Arch
       # does not support. A stale database fails the download instead (404 on a mirror):
@@ -98,7 +95,7 @@ pkg_feeds() {
      package database is out of date: update the system first ($(is_omarchy && echo 'omarchy update, or ')sudo pacman -Syu),
      reboot if the kernel was updated (linux-apfs-rw builds against the running kernel), then re-run."
       arch_install_lzfse ;;
-    *) die "unsupported distro: $(detect_distro) — install the packages from docs/SETUP.md §2/§5.1 manually." ;;
+    *) die "unsupported distro: $(detect_distro) — install the packages from docs/SETUP.md §2 manually." ;;
   esac
 }
 
@@ -154,6 +151,27 @@ do_phase deps && {
   [ "$(cat /proc/sys/vm/max_map_count)" -ge 1048576 ] ||
     warn "vm.max_map_count is $(cat /proc/sys/vm/max_map_count): set 1048576 (docs/SETUP.md §2)"
   [ -e /dev/vhost-vsock ] || warn "/dev/vhost-vsock missing: boot with VSOCK=uds, or load vhost_vsock"
+  # docs/SETUP.md's vhost-vsock access, applied on WSL: without the udev rule a one-off chmod
+  # is lost at the next udev event on the device and QEMU fails with "Permission denied".
+  if is_wsl && [ ! -e /etc/udev/rules.d/90-vhost-vsock.rules ]; then
+    echo vhost_vsock | sudo tee /etc/modules-load.d/vhost-vsock.conf >/dev/null
+    echo 'KERNEL=="vhost-vsock", MODE="0666"' | sudo tee /etc/udev/rules.d/90-vhost-vsock.rules >/dev/null
+  fi
+  # /dev/vhost-vsock can exist before its module loads (a static node, root:kvm 0660): load the
+  # module so udev creates the real node with the rule's mode.
+  if is_wsl && ! grep -q '^vhost_vsock ' /proc/modules; then
+    if ! { sudo udevadm control --reload && sudo modprobe vhost_vsock && sudo udevadm settle; }; then
+      warn "could not load vhost_vsock"
+    fi
+  fi
+  # WSL: no logind seat, so libirecovery's uaccess rule never opens the guest's DFU/recovery/
+  # restore USB device to the user and recovery-probe times out. Open Apple's 05ac:12xx instead.
+  if is_wsl && [ ! -e /etc/udev/rules.d/70-vphone-apple-usb.rules ]; then
+    if ! { sudo install -m 644 "$VSETUP_ROOT/data/70-vphone-apple-usb.rules" /etc/udev/rules.d/ &&
+           sudo udevadm control --reload; }; then
+      warn "could not install the Apple USB udev rule"
+    fi
+  fi
 }
 
 # ------------------------------------------------------------- 2. sources ---
@@ -221,7 +239,12 @@ build_apfs() {
     make -C "$dir" clean
   fi
   log " Building linux-apfs-rw for kernel $(uname -r)"
-  make -C "$dir"
+  if is_wsl && [ ! -e "/lib/modules/$(uname -r)/build" ]; then
+    # WSL: no headers package for Microsoft's kernel; build against its source tree
+    make -C "$dir" CC="${WSL_KERNEL_CC:-gcc-13}" KERNEL_DIR="$("$VSETUP_SRC/tools/wsl-kernel-tree.sh")"
+  else
+    make -C "$dir"
+  fi
 }
 
 # An lzfse built with Arch's default LTO cannot be linked by Swift: rebuild it first

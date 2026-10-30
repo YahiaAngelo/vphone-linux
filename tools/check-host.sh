@@ -8,7 +8,14 @@ mem=$(awk '/MemTotal/{print int($2/1048576)}' /proc/meminfo)
 [ "$mem" -ge 15 ] && pass "${mem} GB RAM" || warn "${mem} GB RAM; 16 GB minimum"
 shm=$(df -BG --output=avail /dev/shm | tail -1 | tr -dc 0-9)
 [ "$shm" -ge 9 ] && pass "/dev/shm has ${shm} GB free" || warn "/dev/shm has ${shm} GB free; the guest's RAM (MEM, default 8G) lives there"
-if command -v vulkaninfo >/dev/null; then
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  pass "WSL2 ($(uname -r)); the GPU path uses lavapipe (CPU), see docs/WSL.md"
+  ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1 && pass "lavapipe ICD installed" \
+    || warn "lavapipe ICD missing (package mesa-vulkan-drivers)"
+  [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && pass "WSLg display" \
+    || warn "no WSLg display (WINDOW=1 needs WSLg: wsl --update, guiApplications=true)"
+  usbip version >/dev/null 2>&1 && pass "usbip" || warn "usbip not runnable (./setup/setup.sh deps links it)"
+elif command -v vulkaninfo >/dev/null; then
   g=$(vulkaninfo --summary 2>/dev/null | awk -F= '/deviceName/{print $2; exit}')
   if [ -z "$g" ]; then warn "vulkaninfo found no Vulkan GPU"
   elif ! vulkaninfo --summary 2>/dev/null | grep -q 'PHYSICAL_DEVICE_TYPE_\(DISCRETE\|INTEGRATED\|VIRTUAL\)_GPU'; then

@@ -1,0 +1,4 @@
+# vphone-linux: let the user's tools (vphone-cli restore, recovery-probe) open the guest's USB
+# device in DFU, recovery and restore modes. Distros grant this through libirecovery's rules and
+# TAG+="uaccess", which needs a logind seat; WSL2 has none, so the node stays root-only.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="12[0-9a-f][0-9a-f]", MODE="0666"
