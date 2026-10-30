@@ -30,6 +30,14 @@ confirm() { # confirm <prompt>
   [ "$a" = Y ] || [ "$a" = y ]
 }
 
+confirm_yes() { # confirm_yes <prompt>: like confirm, but Enter means yes
+  [ "${VSETUP_ASSUME_YES:-0}" = 1 ] && return 0
+  local a
+  printf '\033[1;34m?>\033[0m %s [Y/n] ' "$*" >&2
+  read -rn 1 a || a=y; [ -z "$a" ] || printf '\n' >&2
+  [ "$a" != N ] && [ "$a" != n ]
+}
+
 # ---- jq-free JSON helpers (python3 is a base dependency anyway) ----------
 
 _json() { python3 "$VSETUP_ROOT/lib/json_query.py" "$1" "$2"; }
@@ -76,6 +84,32 @@ is_omarchy() { have omarchy-version || [ -d /usr/share/omarchy ]; }
 # WSL2 (Windows Subsystem for Linux): a Microsoft kernel with no distro headers package,
 # the GPU reached through /dev/dxg (Mesa's dzn Vulkan driver) and Windows drives on /mnt.
 is_wsl() { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
+
+# What setup.sh installed (so setup/uninstall.sh removes only that):
+#   packages.txt  system packages that were not installed before setup ran
+#   tools.txt     rustup / rcodesign / swiftly, when setup installed them
+VSETUP_STATE=${VSETUP_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/vphone-linux}
+
+installed_pkgs() { # sorted names of every installed system package
+  case $(distro_family) in
+    arch)   pacman -Qq ;;
+    fedora) rpm -qa --qf '%{NAME}\n' ;;
+    debian) dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' | awk '$1 ~ /^ii/ {print $2}' ;;
+    *)      true ;;
+  esac | sort -u
+}
+
+record_pkgs_since() { # record_pkgs_since <file with the earlier installed_pkgs>
+  mkdir -p "$VSETUP_STATE"
+  { cat "$VSETUP_STATE/packages.txt" 2>/dev/null || true
+    installed_pkgs | comm -13 "$1" -; } | sort -u > "$VSETUP_STATE/packages.txt.new"
+  mv "$VSETUP_STATE/packages.txt.new" "$VSETUP_STATE/packages.txt"
+}
+
+record_tool() { # record_tool <name>
+  mkdir -p "$VSETUP_STATE"
+  grep -qx "$1" "$VSETUP_STATE/tools.txt" 2>/dev/null || echo "$1" >> "$VSETUP_STATE/tools.txt"
+}
 
 require_root() {
   [ "$(id -u)" = 0 ] || die "this step needs root (built-in steps tell you when)"

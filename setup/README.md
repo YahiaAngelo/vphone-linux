@@ -81,6 +81,16 @@ or Ctrl-A X, never `pkill` (that would hit another agent's VM too).
 Pairings `requiresMacBuilder` (iOS 18, kernel-first) are refused with the
 macOS instructions instead of pretending they work on Linux alone.
 
+## Uninstalling
+
+`./setup/uninstall.sh` (`--dry-run` to preview, `-y` for no prompts, `--vms` to also delete your
+VMs, `--downloads` to also delete the IPSWs in `~/.cache/vphone`, the GPU driver and the vphone-cli
+release, `--all` for all of it after one question) removes Swift/swiftly, rcodesign, rustup if setup installed it, the build
+output, swiftly's lines in your shell profile, and system packages: the ones only vphone-linux
+uses (lzfse, libxml2-legacy, usbip, libimobiledevice and its libraries) plus any setup.sh recorded in
+`~/.local/state/vphone-linux/packages.txt`. It keeps any that another installed package needs, and
+says which package needs it.
+
 ## Flags
 
 | | |
@@ -89,6 +99,7 @@ macOS instructions instead of pretending they work on Linux alone.
 | `--cloudos IPSW` | override the pairing's cloudOS image |
 | `--name N` | VM name (default `vphone-<device>-<ios>`) |
 | `--scale 1|2|3` | display scale (default 1x — 9× fewer pixels than 3x; iOS 27 does not go below 2x) |
+| `--frida` | turn on vphone-cli's Frida kernel patches before the firmware is patched (cloudOS 26.4+; see [docs/FRIDA.md](../docs/FRIDA.md)) |
 | `--dry-run` | print every command the pipeline would run, execute nothing |
 | `--list` | print devices and their pairings |
 | `--cid N` | the VM's vsock CID (default 3; pick another next to a running VM) |

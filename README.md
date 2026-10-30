@@ -111,6 +111,30 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ./setup/create-vm.sh                # pick a device and an iOS version; it creates the VM
 ```
 
+Run `setup.sh` as your normal user, not with `sudo`: it asks for your password when it needs it.
+If a step fails, fix it and run the script again; it skips the work that's already done. You can
+also run one phase at a time: `./setup/setup.sh deps` (or `sources`, `build`, `release`).
+
+**Swift is installed for you.** `setup.sh` installs swiftly and the Swift version pinned in
+`linux-create/.swift-version` (6.4.1), and puts only `swift`, `swiftc` and `swiftly` into
+`~/.local/bin`. It doesn't change your shell profile, and the toolchain's `clang`/`lld` never replace
+your system ones. To rebuild or run vphone-cli's firmware tools on their own:
+
+```sh
+linux-create/build.sh                    # build (installs Swift first if it's missing)
+linux-create/vphone-cli --help           # run it; sudo linux-create/vphone-cli … for root steps
+```
+
+**Uninstalling.** `./setup/uninstall.sh` removes what setup installed and built: Swift and swiftly,
+rcodesign (and rustup, only if setup installed it), the build output in this checkout, and the
+system packages only vphone-linux uses (lzfse, `libxml2-legacy`, usbip, the libimobiledevice
+libraries) or that setup installed, keeping any that another installed package still needs. It asks before each part;
+`--dry-run` shows what it would do. Your VMs are kept unless you add `--vms`, and the downloads
+(the iOS/cloudOS IPSWs in `~/.cache/vphone`, the GPU driver, the vphone-cli release) unless you add
+`--downloads`. `--all` does both and everything else after a single question.
+setup.sh records which packages it installed in `~/.local/state/vphone-linux/`; general tools you
+already had (git, gcc, python...) are never removed.
+
 `create-vm.sh` menus down to a tested device/iOS pairing, runs the whole create flow
 (`fw prepare` + `fw patch`, the DFU restore, the SSH-ramdisk CFW install, the snapshot flip),
 keeps one state file per VM so a re-run resumes after a failed step, and starts QEMU exactly once
@@ -119,6 +143,7 @@ at the end (never killed by the scripts). Non-interactive:
 ```sh
 ./setup/create-vm.sh --device "iPhone17,3" --ios 26.6.2 --scale 1
 ./setup/create-vm.sh --list         # every device and its tested pairings
+./setup/create-vm.sh --frida ...    # also turn on vphone-cli's Frida kernel patches (docs/FRIDA.md)
 ```
 
 The pairings tested here: iPhone17,3 + iOS 26.6.2 and + iOS 27.0.1 (end to end with these scripts:
@@ -138,6 +163,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
 | [docs/WSL.md](docs/WSL.md) | Running on Windows 11 under WSL2: what differs (lavapipe, the kernel tree for APFS) and the one-time setup |
+| [docs/FRIDA.md](docs/FRIDA.md) | vphone-cli's Frida kernel patches (`create-vm.sh --frida`) and what is still open |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the machine model, SEP, GIC, USB touch, vsock and the GPU path fit together |
