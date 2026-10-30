@@ -83,7 +83,7 @@ pkg_feeds() {
       # Ubuntu's /usr/bin/usbip only runs linux-tools for the running kernel, which is never
       # installed on WSL or a custom kernel: link the newest one instead.
       usbip version >/dev/null 2>&1 || {
-        local u; u=$(find /usr/lib/linux-tools -name usbip -path '*/usbip' 2>/dev/null | sort -V | tail -1)
+        local u; u=$(find /usr/lib/linux-tools -name usbip 2>/dev/null | sort -V | tail -1 || true)
         if [ -n "$u" ]; then sudo ln -sf "$u" /usr/local/bin/usbip; fi
       } ;;
     arch)

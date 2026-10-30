@@ -14,14 +14,32 @@ SWIFTLY_HOME_DIR=${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}
 SWIFTLY_TOOLCHAINS_DIR=${SWIFTLY_TOOLCHAINS_DIR:-$SWIFTLY_HOME_DIR/toolchains}
 export SWIFTLY_HOME_DIR SWIFTLY_TOOLCHAINS_DIR
 
-# swiftly only knows a few distros. Arch and other rolling distros use the
-# RHEL UBI 9 build: it has every Swift release and needs only an old glibc
-# plus libxml2.so.2 (Arch: libxml2-legacy).
+# The platform swiftly installs the toolchain for, always named: swiftly's own detection accepts
+# only the exact releases it lists (Fedora 44 is "Unsupported Linux platform"), and swift.org
+# builds each Swift release for a few of them (6.4.1: Ubuntu 22.04/24.04/26.04, Debian 12/13,
+# Fedora 41, UBI 9). A newer release of a family takes its newest build, an Ubuntu between LTSes
+# (25.10, Mint) the LTS below it. Arch and other rolling distros use the RHEL UBI 9 build: it
+# needs only an old glibc plus libxml2.so.2 (Arch: libxml2-legacy).
 swiftly_platform() {
-  local id like
-  id=$(os_release ID); like=$(os_release ID_LIKE)
-  case " $id $like " in
-    *" ubuntu "*|*" debian "*|*" fedora "*) echo "" ;;   # swiftly detects these itself
+  local id like ver major
+  id=$(os_release ID); like=$(os_release ID_LIKE); ver=$(os_release VERSION_ID)
+  major=${ver%%.*}
+  case " $id " in
+    *" ubuntu "*)
+      case $ver in
+        2[6-9].*|[3-9]?.*) echo ubuntu26.04 ;;
+        24.*|25.*) echo ubuntu24.04 ;;
+        *) echo ubuntu22.04 ;;
+      esac; return ;;
+    *" debian "*)
+      if [ "${major:-13}" -le 12 ] 2>/dev/null; then echo debian12; else echo debian13; fi; return ;;
+    *" fedora "*) echo fedora41; return ;;
+  esac
+  case " $like " in
+    *" ubuntu "*) echo ubuntu24.04 ;;    # Mint, Pop!_OS...: their VERSION_ID is not Ubuntu's
+    *" debian "*) echo debian13 ;;
+    *" rhel "*|*" centos "*) echo ubi9 ;;   # RHEL 9's glibc is too old for the Fedora build
+    *" fedora "*) echo fedora41 ;;
     *) echo ubi9 ;;
   esac
 }
