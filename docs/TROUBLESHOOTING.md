@@ -97,6 +97,38 @@ shifting `nvram.bin` 16 KiB forward (16 KiB of zeros, then the first 32 MiB).
 mark each USB request done in the request descriptor itself (`flags = 0x8000`), not in a register as
 AVPBooter and iBoot do. Use the restore QEMU with the current `hw/vmapple/vusb.c`.
 
+**"The device did not enter dfu/recovery mode in time"** (from `recovery-probe`, the GPU-driver
+step or `create-vm.sh`). Run `tools/dfu-diagnose.sh <run-dir>` as your user: it checks QEMU, the
+exporter, the attach loop and the attached device. The usual cause on Arch and other distros
+without a matching libirecovery udev rule: the DFU device is attached but root-only, so
+vphone-cli's libirecovery, running as your user, cannot open it and skips it. The current
+`tools/usbip-autoattach.sh` installs a rule for it in `/run/udev/rules.d` (gone at reboot), with
+`MODE:=` so systemd's later `50-udev-default.rules` cannot set the device back to 0664 (an earlier
+version's plain `MODE=` was undone that way: `ls -l /dev/bus/usb/*/*` showed the Apple device
+`crw-rw-r--` root). Restart an attach loop started from an older checkout
+(`sudo pkill -f usbip-autoattach.sh`, then `sudo tools/usbip-autoattach.sh`).
+
+**`Error: Unsupported Linux platform` while setup installs Swift.** swiftly recognises only the
+exact releases it lists (Fedora 39/41, Ubuntu 22.04/24.04/26.04, Debian 12/13, UBI 9...), so its
+own detection refuses Fedora 44 and other newer releases. The current `setup/lib/swift.sh` always
+names the platform (Fedora: `fedora41`, Arch and others: `ubi9`). An older checkout downloaded
+`swiftly.tar.gz`, which is gone (404): update and run `./setup/setup.sh deps` again.
+
+**`swift build` fails with `libxml2.so.2` or `libncurses.so.6` not found (Arch).** swift.org has no
+Arch build; the UBI 9 one needs `libxml2-legacy` and the ncurses links `setup.sh` adds inside the
+toolchain. Run `./setup/setup.sh deps`, or see the Arch notes in [SETUP.md](SETUP.md).
+
+**`reims-vgpu: fatal: ... newBufferWithBytesNoCopy ... HostMemory, needs ExtExternalMemoryHost`.**
+The Vulkan driver cannot import the guest's memory by pointer (`VK_EXT_external_memory_host`). A
+Linux VM's virtio-gpu Venus (tryOmarchy, QEMU/virglrenderer) and WSL's dzn have no such extension:
+render on lavapipe instead (`VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`; WSL picks it
+by itself). `tools/check-host.sh` warns about it.
+
+**`one-time-boot-command=device-recovery` after "rebooting due to critical process crashes:
+SpringBoard".** iOS rebooted itself into recovery, and every later boot goes there too. Boot with
+`GFX=1` (SpringBoard needs the GPU device), and clear the request:
+`tools/nvram-autoboot.py VM/nvram.bin --drop one-time-boot-command --drop device-recovery-boot-reason`.
+
 **"Unable to discover device mode" right after `dfu-up.sh`.** An exporter from an earlier run still
 holds 127.0.0.1:3240 for a VM that is gone. The current `dfu-up.sh` stops every old
 `vusb-usbip.py` first.

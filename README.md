@@ -1,6 +1,6 @@
 # vphone-linux
 
-Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**.
+Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**, or on Windows 11 under WSL2 ([docs/WSL.md](docs/WSL.md)).
 
 <p align="center">
   <img src="docs/screenshots/lock-screen.png" width="200" alt="Lock screen">
@@ -33,6 +33,18 @@ Development updates: [@YahiaDev on X](https://x.com/YahiaDev).
 
 So far tested on one PC: Fedora 44, Intel i7-14700K, 62 GB RAM, NVIDIA RTX 4080 SUPER (driver
 615.71.09).
+
+Linux distributions `setup/setup.sh` supports, and how far each was tested:
+
+| Distribution | Tested |
+|---|---|
+| Fedora 43/44 | end to end (the home screen) on the PC above; setup + vphone-cli build in a clean Fedora 44 container |
+| Arch Linux, Omarchy | setup, the whole build, and a VM created through the CFW install (Omarchy 4.0.4 in a VM); `tools/omarchy-window.sh` floats the iPhone window under Hyprland |
+| Debian 13, Ubuntu 25.04+ | setup + vphone-cli build in clean Debian 13 and Ubuntu 26.04 containers |
+| Windows 11 (WSL2, Ubuntu) | the iPhone boots, rendered on lavapipe ([docs/WSL.md](docs/WSL.md)) |
+
+Every list of packages is checked against Fedora 43/44, Debian 13, Ubuntu 25.10/26.04 and Arch by
+CI. Ubuntu 24.04 is too old (no libimobiledevice-glue or libtatsu).
 
 Tested guest pairings on Linux:
 
@@ -125,6 +137,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md) | The create flow in detail: firmware, restore over USB/IP, custom firmware, first boot |
 | [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
+| [docs/WSL.md](docs/WSL.md) | Running on Windows 11 under WSL2: what differs (lavapipe, the kernel tree for APFS) and the one-time setup |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the machine model, SEP, GIC, USB touch, vsock and the GPU path fit together |

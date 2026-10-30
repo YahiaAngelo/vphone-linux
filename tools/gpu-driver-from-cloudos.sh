@@ -64,7 +64,7 @@ PY
 echo "=== DFU"
 tools/dfu-up.sh "$VM" "$RUN" >/dev/null
 for _ in $(seq 1 60); do "$VC" recovery-probe >/dev/null 2>&1 && break; sleep 3; done
-"$VC" recovery-probe
+"$VC" recovery-probe || { tools/dfu-diagnose.sh "$RUN"; exit 1; }
 
 echo "=== restoring the stock cloudOS (log: $RUN/restore.log)"
 VPHONE_RESTORE_TIMEOUT_SCALE=${VPHONE_RESTORE_TIMEOUT_SCALE:-10} \

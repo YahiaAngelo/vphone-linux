@@ -28,6 +28,7 @@ linux-create/Sources/
 /guest-resources
 /.build/
 /vphone-cli/
+/cpu-tree/
 /ipsws/
 /drivers/
 
@@ -37,3 +38,5 @@ setup/tmp/
 vphone-setup-work/
 opensshrd/
 sshramdisk/
+linux-create/Shims/libarchive/lib/
+/cpu-tree/

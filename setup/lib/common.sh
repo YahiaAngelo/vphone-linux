@@ -50,7 +50,32 @@ pick_json() { _json "$@"; }
   fi
 }
 
+# The package family: fedora, debian or arch (derivatives such as CachyOS,
+# EndeavourOS, Manjaro or Garuda map to arch through ID_LIKE).
+# os_release <KEY>: one /etc/os-release field, unquoted (read, not sourced: the file sets NAME,
+# VERSION... which scripts here use for their own things).
+os_release() { sed -n "s/^$1=//p" /etc/os-release 2>/dev/null | tr -d "\"'" | head -1; }
+
+distro_family() {
+  local id like
+  id=$(os_release ID); id=${id:-unknown}
+  like=$(os_release ID_LIKE)
+  case " $id $like " in
+    *" arch "*|*" cachyos "*|*" manjaro "*|*" endeavouros "*) echo arch ;;
+    *" fedora "*|*" rhel "*) echo fedora ;;
+    *" debian "*|*" ubuntu "*|*" linuxmint "*) echo debian ;;
+    *) echo "$id" ;;
+  esac
+}
+
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Omarchy (Arch + Hyprland, omarchy.org) says ID=arch; it is recognised by its own files.
+is_omarchy() { have omarchy-version || [ -d /usr/share/omarchy ]; }
+
+# WSL2 (Windows Subsystem for Linux): a Microsoft kernel with no distro headers package,
+# the GPU reached through /dev/dxg (Mesa's dzn Vulkan driver) and Windows drives on /mnt.
+is_wsl() { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
 
 require_root() {
   [ "$(id -u)" = 0 ] || die "this step needs root (built-in steps tell you when)"

@@ -18,6 +18,7 @@ Common arguments:
 | Script | Usage | What it does |
 |---|---|---|
 | `check-host.sh` | `tools/check-host.sh` | Checks this PC against the requirements in SETUP.md (CPU, RAM, `/dev/shm`, Vulkan GPU, `/dev/vhost-vsock`, `vm.max_map_count`, Rust, meson). Changes nothing. |
+| `omarchy-window.sh` | `tools/omarchy-window.sh [--remove]` | Omarchy/Hyprland: adds a window rule (`~/.config/hypr/vphone-linux.lua`) so the iPhone window floats centred at its own shape instead of being tiled. `--remove` takes it out. |
 | `import-vm.sh` | `tools/import-vm.sh SOURCE NAME` | Copies a vphone-cli VM (a local path or `user@mac:path` over ssh) into `vms/NAME`, sparse, writes its `ecid` file and keeps a `vms/NAME.pristine` copy. |
 
 `../build.sh` builds the submodules and QEMU (see [SETUP.md](SETUP.md#3-build)).
@@ -109,7 +110,8 @@ Used by [CREATE-ON-LINUX.md](CREATE-ON-LINUX.md). The ones marked "root" need su
 | `nvram-autoboot.py` | `tools/nvram-autoboot.py NVRAM [--auto-boot true\|false] [--dry-run]` | Edits the guest's NVRAM banks in `nvram.bin` (stopped VM): sets `auto-boot` and drops the restore's `boot-args`. `false` makes iBoot stop at recovery for the SSH ramdisk; `true` boots the installed system. |
 | `build-usbmuxd-32k.sh` | `tools/build-usbmuxd-32k.sh` | Builds stock usbmuxd with a 32 KiB USB MTU into `.build/usbmuxd-32k/` (no autotools needed). |
 | `usbmuxd-32k.sh` | `sudo tools/usbmuxd-32k.sh` | Root. Stops and runtime-masks the system usbmuxd and runs the 32 KiB one (pidfile `/run/usbmuxd-32k.pid`). |
-| `usbip-autoattach.sh` | `sudo tools/usbip-autoattach.sh` | Root. Attaches whatever the local exporter offers whenever nothing is attached, so each restore stage is picked up. Ctrl-C to stop. |
+| `usbip-autoattach.sh` | `sudo tools/usbip-autoattach.sh` | Root. Attaches whatever the local exporter offers whenever nothing is attached, so each restore stage is picked up. Also installs a runtime udev rule so the user can open the device in DFU/recovery mode. Ctrl-C to stop. |
+| `dfu-diagnose.sh` | `tools/dfu-diagnose.sh [RUN-DIR]` | Read-only. When `recovery-probe` finds nothing: checks QEMU, the exporter, the attach loop, the attached Apple device and whether this user can open it. |
 | `ssh-ramdisk-stage.sh` | `tools/ssh-ramdisk-stage.sh [OUT]` | Downloads SSHRD_Script's `ssh.tar.gz` (pinned commit, SHA-256 checked) and unpacks it as the SSH ramdisk's staging tree, `runs/sshramdisk/ssh-root`, minus the files the ramdisk does not need. No root. |
 | `ssh-ramdisk-inject.sh` | `sudo tools/ssh-ramdisk-inject.sh` | Root. Adds the SSH tools (dropbear and friends) to the extracted cloudOS restore ramdisk. |
 | `ssh-ramdisk-repack.sh` | `tools/ssh-ramdisk-repack.sh [STOCK.dmg] [PAYLOAD] [OUT.dmg]` | Puts the modified APFS payload back into the stock `rdsk` IM4P wrapper. |

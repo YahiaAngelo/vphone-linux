@@ -1,5 +1,6 @@
 # Swift 6.4 Linux Foundation aborts when an invalidated URLSession is torn down
-# ("_MultiHandle deallocated with non-zero retain count"); leave the session to be freed instead.
-Firmware/VPhoneFirmwareIndex.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = session \/\/ vphone-linux: invalidating a URLSession aborts on Linux Foundation (_MultiHandle retain count)/
-Firmware/VPhoneAEA.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = session \/\/ vphone-linux: invalidating a URLSession aborts on Linux Foundation (_MultiHandle retain count)/
+# ("_MultiHandle deallocated with non-zero retain count"), and so does freeing it (consistently with
+# curl 8.18): keep one retain so the session lives for the process.
+Firmware/VPhoneFirmwareIndex.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = Unmanaged.passRetained(session) \/\/ vphone-linux: never free a URLSession on Linux Foundation (_MultiHandle deinit aborts); this one lives for the process/
+Firmware/VPhoneAEA.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = Unmanaged.passRetained(session) \/\/ vphone-linux: never free a URLSession on Linux Foundation (_MultiHandle deinit aborts); this one lives for the process/
 VirtualMachine/VPhoneShaderCache.swift	s/confstr\(_CS_DARWIN_USER_CACHE_DIR, /vphoneUserCacheDir(/

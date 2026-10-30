@@ -39,7 +39,7 @@ out (building by hand, display scale, services, the pinned commits) is in [ADVAN
 | RAM | 16 GB | 32 GB |
 | GPU | A Vulkan GPU | NVIDIA (the only vendor tested so far) |
 | Disk | 100 GB free, btrfs or XFS | SSD, 150 GB free |
-| OS | Any recent 64-bit distribution | Fedora (the only one tested so far) |
+| OS | Fedora, Debian 13+, Ubuntu 25.04+, Arch/Omarchy, or Windows 11 with WSL2 | Fedora (the most tested) |
 
 - **Root** (sudo) for a few steps while creating the VM.
 - **An internet connection**: about 13 GB of firmware comes from Apple's servers.
@@ -57,28 +57,83 @@ seconds to open and scrolling runs at about 60 frames/s with occasional stutters
 
 ## 2. Install the dependencies
 
-On Fedora:
+On Fedora (and RHEL-likes):
 
 ```sh
-sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson python3 rsync \
-  glib2-devel pixman-devel lzfse-devel libslirp-devel libssh-devel libzstd-devel \
-  nettle-devel gnutls-devel gtk3-devel sdl2-compat-devel bzip2-devel \
-  libX11-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel \
-  vulkan-loader vulkan-loader-devel vulkan-tools socat python3-pillow \
-  usbip fuse-sshfs fuse3 7zip kernel-devel unzip curl zstd \
-  libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel \
-  libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel
+sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson python3 \
+  python3-pillow rsync glib2-devel pixman-devel lzfse-devel libslirp-devel \
+  libssh-devel libzstd-devel nettle-devel gnutls-devel gtk3-devel \
+  sdl2-compat-devel bzip2-devel libX11-devel libXScrnSaver-devel \
+  wayland-devel libxkbcommon-devel vulkan-loader vulkan-loader-devel \
+  vulkan-tools socat gdb perf unzip curl zstd usbip fuse-sshfs fuse3 7zip \
+  kernel-devel libusb1-devel libplist-devel libimobiledevice-glue-devel \
+  openssl-devel libcurl-devel libimobiledevice-devel libusbmuxd-devel \
+  libtatsu-devel libarchive-devel zip libedit-devel sqlite-devel \
+  libuuid-devel python3-devel libstdc++-static
 ```
 
-On other distributions, install the same packages under their names there. `lld` provides
+On Debian 13+ and Ubuntu 25.04+ (and Mint, Pop!_OS... built on them):
+
+```sh
+sudo apt-get update
+sudo apt-get install git gcc g++ clang lld binutils make cmake ninja-build meson python3 \
+  python3-pil python3-setuptools pkg-config rsync unzip curl zstd \
+  libglib2.0-dev libpixman-1-dev liblzfse-dev libslirp-dev libssh-dev \
+  libzstd-dev nettle-dev libgnutls28-dev libgtk-3-dev libsdl2-dev \
+  libbz2-dev libx11-dev libxss-dev libxkbcommon-dev libwayland-dev \
+  wayland-protocols libvulkan-dev mesa-vulkan-drivers vulkan-tools socat \
+  gdb hwdata sshfs fuse3 7zip bc flex bison libelf-dev binutils-gold zip \
+  gnupg2 libpython3-dev libxml2-dev libncurses-dev libz3-dev libedit-dev \
+  libsqlite3-dev libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev \
+  libssl-dev libcurl4-openssl-dev libimobiledevice-dev libusbmuxd-dev \
+  libtatsu-dev libarchive-dev \
+  linux-headers-generic usbip        # Ubuntu: linux-tools-generic in place of usbip
+```
+
+Ubuntu 24.04 and other older releases have no `libimobiledevice-glue` or `libtatsu` and an older
+libimobiledevice than the 1.4 that vphone-cli's restore code links; use a newer release.
+
+On Arch Linux and Omarchy (and CachyOS, EndeavourOS, Manjaro...), with the system up to date first
+(`sudo pacman -Syu`, or `omarchy update` on Omarchy; reboot if the kernel was updated):
+
+```sh
+sudo pacman -S --needed git base-devel gcc clang lld binutils make cmake ninja meson pkgconf \
+  python python-pillow python-setuptools rsync glib2 pixman libslirp libssh zstd nettle gnutls \
+  gtk3 sdl2-compat bzip2 zlib libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers \
+  vulkan-tools libxext libxrandr libxcursor libxi libxfixes libxtst libdecor libdrm flex bison dtc \
+  socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg libusb libplist \
+  libimobiledevice-glue libimobiledevice libusbmuxd libtatsu libarchive openssl \
+  libxml2-legacy libedit sqlite "$(cat /usr/lib/modules/$(uname -r)/pkgbase)-headers"
+git clone https://aur.archlinux.org/lzfse.git /tmp/lzfse
+echo "options+=('!lto')" >> /tmp/lzfse/PKGBUILD && (cd /tmp/lzfse && makepkg -sif)
+```
+
+`lzfse` is only in the AUR. Build it with LTO off as above (not with yay/paru): Arch's default LTO
+fills its static `liblzfse.a` with GCC's intermediate code, which the Swift toolchain's linker cannot
+read (`undefined symbol: lzfse_encode_buffer`). `libxml2-legacy` provides `libxml2.so.2`, which the Swift toolchain
+(`swift build`, `lld`) needs; Arch's own `libxml2` is a newer, incompatible version. The last
+package is the headers for the kernel you run (`linux-headers`, `linux-zen-headers`...). Your GPU's
+Vulkan driver must be installed too: `nvidia-utils` (Omarchy installs it on NVIDIA PCs),
+`vulkan-radeon` or `vulkan-intel`. Arch already sets `vm.max_map_count` to 1048576.
+`setup/setup.sh` does all of this (the list lives in `setup/lib/packages.sh`).
+
+These lists are `setup/lib/packages.sh`, which `setup/setup.sh` installs and CI checks on Fedora
+43/44, Debian 13, Ubuntu 25.10/26.04 and Arch. On other distributions, install the same packages
+under their names there. `lld` provides
 `lld-link` and `ld.lld`, which reims-vgpu's option ROM is linked with (`reims-vgpu/firmware/Makefile`). (Checked in a clean
 Fedora 44 container: they all install, every library the build links against is then present, and the GPU library's SDL window code configures.)
 
 Then:
 
 - **Rust**, with [rustup](https://rustup.rs).
-- **Swift 6.4.1** for Linux, with [swiftly](https://www.swift.org/install/linux/) (tested with
-  `swift-6.4.1-RELEASE`). It builds vphone-cli's firmware tools.
+- **Swift 6.4.1** for Linux (the version in `linux-create/.swift-version`). You don't need to install
+  it yourself: `linux-create/build.sh` installs [swiftly](https://www.swift.org/install/linux/) and
+  this toolchain when it's missing, and calls it by its full path. Nothing is added to your shell's
+  PATH. It always names swiftly's platform, because swiftly only recognises the exact releases it
+  lists (on Fedora 44 its own detection fails with "Unsupported Linux platform"): Fedora gets the
+  `fedora41` build, Debian `debian12`/`debian13`, Ubuntu its LTS (or the one below it), and Arch,
+  RHEL-likes and the rest `ubi9`. On Arch it also links Arch's `libncursesw.so.6` into the
+  toolchain as the `libncurses.so.6` it expects.
 - **rcodesign**, which signs app bundles while the VM is created: `cargo install apple-codesign --locked`.
 
 Set two system options. They are permanent, so this is needed only once:
@@ -117,12 +172,12 @@ The rest of this step builds the tools that create the VM.
 **vphone-cli's firmware tools, for Linux** (`linux-create/`, about 5 minutes):
 
 ```sh
-git clone https://github.com/Lakr233/vphone-cli.git && git -C vphone-cli checkout 2.12.1
-cd linux-create
-VPHONE_CLI=../vphone-cli ./sync-sources.sh
-swift build --build-system swiftbuild --scratch-path .build/out
-cd ..
+linux-create/build.sh      # fetches vphone-cli, installs Swift if needed, syncs and builds
+linux-create/vphone-cli --help
 ```
+
+`linux-create/vphone-cli` runs the built tool (it builds it first if needed); use it as
+`sudo linux-create/vphone-cli ...` for the steps that need root.
 
 **vphone-cli's release files.** Download
 [VPhone-2.12.1.zip](https://github.com/Lakr233/vphone-cli/releases/download/2.12.1/VPhone-2.12.1.zip)
@@ -203,6 +258,12 @@ tools/vphoned.sh POST /v1/rpc '{"method":"screen.unlock","params":{},"id":1}'
 
 If it answers "Lock Screen did not dismiss in time", wait 15 seconds and run it again. Swiping up from
 the bottom of the screen also works.
+
+**On Omarchy (or any Hyprland setup)** the window is tiled and stretched by default. Run
+`tools/omarchy-window.sh` once (`setup/setup.sh` offers it): it adds a Hyprland rule,
+`~/.config/hypr/vphone-linux.lua`, that floats the window centred at the iPhone's shape, 85% of the
+screen's height, fully opaque, and keeps the PC from idling while it has focus.
+`tools/omarchy-window.sh --remove` undoes it.
 
 **Using it:** click to tap, drag to scroll, swipe up from the bottom edge (or middle-click) to go
 Home. If clicks do nothing, the screen has gone to sleep: run the unlock command again, and set

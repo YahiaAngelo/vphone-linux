@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run the Linux build of vphone-cli without remembering its build path:
+#
+#   linux-create/vphone-cli fw prepare ...
+#   sudo linux-create/vphone-cli cfw install ...
+#
+# Builds it first (as your user) when it has not been built yet.
+set -Eeuo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+bin=$here/.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli
+if [ ! -x "$bin" ]; then
+  if [ "$(id -u)" = 0 ]; then
+    echo "vphone-cli is not built yet; run $here/build.sh as your user first" >&2; exit 1
+  fi
+  "$here/build.sh" >&2
+fi
+exec "$bin" "$@"
