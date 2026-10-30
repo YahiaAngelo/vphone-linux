@@ -242,7 +242,7 @@ if [ ${#dls[@]} -gt 0 ]; then
 fi
 # Remove the work folder once nothing is left in it.
 work=$HOME/vphone-setup-work
-[ "$DRY" = 0 ] && [ -d "$work" ] && rmdir "$work" 2>/dev/null || true
+if [ "$DRY" = 0 ] && [ -d "$work" ]; then rmdir "$work" 2>/dev/null || true; fi
 
 # Keep the record of anything still installed (declined, or still needed), so a
 # later run can offer it again.
