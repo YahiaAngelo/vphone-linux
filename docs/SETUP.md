@@ -39,7 +39,7 @@ out (building by hand, display scale, services, the pinned commits) is in [ADVAN
 | RAM | 16 GB | 32 GB |
 | GPU | A Vulkan GPU | NVIDIA (the only vendor tested so far) |
 | Disk | 100 GB free, btrfs or XFS | SSD, 150 GB free |
-| OS | Any recent 64-bit distribution | Fedora (the only one tested so far) |
+| OS | Fedora, Debian 13+, Ubuntu 25.04+, Arch/Omarchy, or Windows 11 with WSL2 | Fedora (the most tested) |
 
 - **Root** (sudo) for a few steps while creating the VM.
 - **An internet connection**: about 13 GB of firmware comes from Apple's servers.
@@ -57,18 +57,41 @@ seconds to open and scrolling runs at about 60 frames/s with occasional stutters
 
 ## 2. Install the dependencies
 
-On Fedora:
+On Fedora (and RHEL-likes):
 
 ```sh
-sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson python3 rsync \
-  glib2-devel pixman-devel lzfse-devel libslirp-devel libssh-devel libzstd-devel \
-  nettle-devel gnutls-devel gtk3-devel sdl2-compat-devel bzip2-devel \
-  libX11-devel libXScrnSaver-devel wayland-devel libxkbcommon-devel \
-  vulkan-loader vulkan-loader-devel vulkan-tools socat python3-pillow \
-  usbip fuse-sshfs fuse3 7zip kernel-devel unzip curl zstd \
-  libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel \
-  libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel
+sudo dnf install git gcc gcc-c++ clang lld binutils make cmake ninja-build meson python3 \
+  python3-pillow rsync glib2-devel pixman-devel lzfse-devel libslirp-devel \
+  libssh-devel libzstd-devel nettle-devel gnutls-devel gtk3-devel \
+  sdl2-compat-devel bzip2-devel libX11-devel libXScrnSaver-devel \
+  wayland-devel libxkbcommon-devel vulkan-loader vulkan-loader-devel \
+  vulkan-tools socat gdb perf unzip curl zstd usbip fuse-sshfs fuse3 7zip \
+  kernel-devel libusb1-devel libplist-devel libimobiledevice-glue-devel \
+  openssl-devel libcurl-devel libimobiledevice-devel libusbmuxd-devel \
+  libtatsu-devel libarchive-devel zip libedit-devel sqlite-devel \
+  libuuid-devel python3-devel libstdc++-static
 ```
+
+On Debian 13+ and Ubuntu 25.04+ (and Mint, Pop!_OS... built on them):
+
+```sh
+sudo apt-get update
+sudo apt-get install git gcc g++ clang lld binutils make cmake ninja-build meson python3 \
+  python3-pil python3-setuptools pkg-config rsync unzip curl zstd \
+  libglib2.0-dev libpixman-1-dev liblzfse-dev libslirp-dev libssh-dev \
+  libzstd-dev nettle-dev libgnutls28-dev libgtk-3-dev libsdl2-dev \
+  libbz2-dev libx11-dev libxss-dev libxkbcommon-dev libwayland-dev \
+  wayland-protocols libvulkan-dev mesa-vulkan-drivers vulkan-tools socat \
+  gdb hwdata sshfs fuse3 7zip bc flex bison libelf-dev binutils-gold zip \
+  gnupg2 libpython3-dev libxml2-dev libncurses-dev libz3-dev libedit-dev \
+  libsqlite3-dev libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev \
+  libssl-dev libcurl4-openssl-dev libimobiledevice-dev libusbmuxd-dev \
+  libtatsu-dev libarchive-dev \
+  linux-headers-generic usbip        # Ubuntu: linux-tools-generic in place of usbip
+```
+
+Ubuntu 24.04 and other older releases have no `libimobiledevice-glue` or `libtatsu` and an older
+libimobiledevice than the 1.4 that vphone-cli's restore code links; use a newer release.
 
 On Arch Linux and Omarchy (and CachyOS, EndeavourOS, Manjaro...), with the system up to date first
 (`sudo pacman -Syu`, or `omarchy update` on Omarchy; reboot if the kernel was updated):
@@ -94,7 +117,9 @@ Vulkan driver must be installed too: `nvidia-utils` (Omarchy installs it on NVID
 `vulkan-radeon` or `vulkan-intel`. Arch already sets `vm.max_map_count` to 1048576.
 `setup/setup.sh` does all of this (the list lives in `setup/lib/packages.sh`).
 
-On other distributions, install the same packages under their names there. `lld` provides
+These lists are `setup/lib/packages.sh`, which `setup/setup.sh` installs and CI checks on Fedora
+43/44, Debian 13, Ubuntu 25.10/26.04 and Arch. On other distributions, install the same packages
+under their names there. `lld` provides
 `lld-link` and `ld.lld`, which reims-vgpu's option ROM is linked with (`reims-vgpu/firmware/Makefile`). (Checked in a clean
 Fedora 44 container: they all install, every library the build links against is then present, and the GPU library's SDL window code configures.)
 
@@ -104,8 +129,11 @@ Then:
 - **Swift 6.4.1** for Linux (the version in `linux-create/.swift-version`). You don't need to install
   it yourself: `linux-create/build.sh` installs [swiftly](https://www.swift.org/install/linux/) and
   this toolchain when it's missing, and calls it by its full path. Nothing is added to your shell's
-  PATH. On distros swiftly doesn't support (Arch and its derivatives), it uses the `ubi9` build and
-  links Arch's `libncursesw.so.6` into the toolchain as the `libncurses.so.6` it expects.
+  PATH. It always names swiftly's platform, because swiftly only recognises the exact releases it
+  lists (on Fedora 44 its own detection fails with "Unsupported Linux platform"): Fedora gets the
+  `fedora41` build, Debian `debian12`/`debian13`, Ubuntu its LTS (or the one below it), and Arch,
+  RHEL-likes and the rest `ubi9`. On Arch it also links Arch's `libncursesw.so.6` into the
+  toolchain as the `libncurses.so.6` it expects.
 - **rcodesign**, which signs app bundles while the VM is created: `cargo install apple-codesign --locked`.
 
 Set two system options. They are permanent, so this is needed only once:

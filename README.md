@@ -34,6 +34,18 @@ Development updates: [@YahiaDev on X](https://x.com/YahiaDev).
 So far tested on one PC: Fedora 44, Intel i7-14700K, 62 GB RAM, NVIDIA RTX 4080 SUPER (driver
 615.71.09).
 
+Linux distributions `setup/setup.sh` supports, and how far each was tested:
+
+| Distribution | Tested |
+|---|---|
+| Fedora 43/44 | end to end (the home screen) on the PC above; setup + vphone-cli build in a clean Fedora 44 container |
+| Arch Linux, Omarchy | setup, the whole build, and a VM created through the CFW install (Omarchy 4.0.4 in a VM); `tools/omarchy-window.sh` floats the iPhone window under Hyprland |
+| Debian 13, Ubuntu 25.04+ | setup + vphone-cli build in clean Debian 13 and Ubuntu 26.04 containers |
+| Windows 11 (WSL2, Ubuntu) | the iPhone boots, rendered on lavapipe ([docs/WSL.md](docs/WSL.md)) |
+
+Every list of packages is checked against Fedora 43/44, Debian 13, Ubuntu 25.10/26.04 and Arch by
+CI. Ubuntu 24.04 is too old (no libimobiledevice-glue or libtatsu).
+
 Tested guest pairings on Linux:
 
 | Device | iOS | cloudOS | State |

@@ -43,9 +43,10 @@ macOS kmutil (refused here).
 
 `setup.sh` (phases: `deps`, `sources`, `build`, `release`, `all`):
 
-1. **deps** — installs the distro's packages (Fedora / Debian / Ubuntu / Arch), rustup,
-   Swift (for vphone-cli's Linux tooling), rcodesign; checks `vm.max_map_count`
-   and `/dev/vhost-vsock`.
+1. **deps** — installs the distro's packages (Fedora, Debian 13+ / Ubuntu 25.04+, Arch and
+   Omarchy; the lists are `lib/packages.sh`), rustup, Swift (for vphone-cli's Linux tooling,
+   through swiftly), rcodesign; sets `vm.max_map_count` and `/dev/vhost-vsock` where missing,
+   and on Hyprland (Omarchy) offers the iPhone-window rule.
 2. **sources** — this checkout (or a `--src` second one) and its three QEMU/GPU submodules.
 3. **build** — reims-vgpu → QEMU (`-M vresearch101`) → vphone-cli's firmware
    tooling for Linux → the restore QEMU (`vusb-restore`) → the 32 KiB usbmuxd.
