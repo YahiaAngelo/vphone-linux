@@ -26,7 +26,11 @@ Format (qemu/hw/nvram/apple_nvram.c, qemu/include/hw/nvram/chrp_nvram.h):
     adler = adler32(1, bank+0x14, bank_length-0x14)
 
 Usage:
-    tools/nvram-autoboot.py vms/myphone/nvram.bin [--auto-boot true|false] [--dry-run]
+    tools/nvram-autoboot.py vms/myphone/nvram.bin [--auto-boot true|false] [--drop NAME]... [--dry-run]
+
+--drop removes a variable, e.g. after iOS rebooted itself into recovery ("rebooting due to
+critical process crashes"), which leaves one-time-boot-command=device-recovery and
+device-recovery-boot-reason behind and sends every later boot back to recovery.
 """
 
 import argparse
@@ -100,7 +104,10 @@ def main() -> int:
                         help="set boot-args to TEXT (empty string removes it); for diagnostics, "
                              "e.g. --boot-args '-v serial=3', which makes iBoot and the kernel print "
                              "to the VM serial console")
+    parser.add_argument("--drop", metavar="NAME", action="append", default=[],
+                        help="remove the variable NAME (repeatable), e.g. --drop one-time-boot-command")
     args = parser.parse_args()
+    drop = {name.encode() for name in args.drop}
 
     with open(args.nvram, "rb") as handle:
         data = bytearray(handle.read())
@@ -138,7 +145,7 @@ def main() -> int:
                 continue
             if name == b"auto-boot":
                 kept.append(b"auto-boot=" + args.auto_boot.encode())
-            elif name == b"boot-args":
+            elif name == b"boot-args" or name in drop:
                 dropped.append(entry.decode("utf-8", "replace"))
             else:
                 kept.append(entry)
@@ -171,8 +178,8 @@ def main() -> int:
         struct.pack_into("<I", data, base + 16,
                          zlib.adler32(bytes(data[base + 0x14:base + length])) & 0xFFFFFFFF)
         changed = True
-        print(f"bank 0x{base:x}: auto-boot=true"
-              + (f", dropped {dropped[0]!r}" if dropped else ""))
+        print(f"bank 0x{base:x}: auto-boot={args.auto_boot}"
+              + (f", dropped {', '.join(repr(d[:60]) for d in dropped)}" if dropped else ""))
 
     if not changed:
         return 0
