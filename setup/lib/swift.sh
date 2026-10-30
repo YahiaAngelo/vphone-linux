@@ -58,7 +58,8 @@ swift_compat_dir() { echo "$SWIFTLY_HOME_DIR/vphone-compat"; }
 swift_make_compat() {
   local lib dir
   for lib in ncurses form panel; do
-    ldconfig -p | grep "lib$lib\.so\.6 " >/dev/null && continue        # the system has it
+    # the system has it (ldconfig is in /sbin, off a user's PATH on Debian)
+    "$(command -v ldconfig || echo /sbin/ldconfig)" -p 2>/dev/null | grep "lib$lib\.so\.6 " >/dev/null && continue
     [ -e "/usr/lib/lib${lib}w.so.6" ] || continue
     for dir in "$(swift_compat_dir)" "$SWIFTLY_TOOLCHAINS_DIR"/*/usr/lib "$SWIFTLY_TOOLCHAINS_DIR"/*/usr/lib/swift/linux; do
       case $dir in *'*'*) continue ;; esac                         # no toolchain installed
@@ -90,12 +91,12 @@ ensure_swift() {
   fi
   printf '==> Installing Swift %s with swiftly%s\n' "$VPHONE_SWIFT_VERSION" "${plat:+ (platform $plat)}"
   tmp=$(mktemp)
-  # swiftly writes the distro packages it thinks are missing to $tmp; on Arch
-  # they are covered by setup.sh's pacman list, so it is only shown.
+  # swiftly writes the distro packages it thinks are missing to $tmp. setup.sh's lists
+  # (setup/lib/packages.sh) carry what the build needs, so this is only shown.
   PATH="$SWIFTLY_HOME_DIR/bin:$PATH" "$swiftly" install "$VPHONE_SWIFT_VERSION" \
     --assume-yes --post-install-file "$tmp"
   if [ -s "$tmp" ]; then
-    printf 'WARN swiftly suggests these system packages (already covered on Arch):\n' >&2
+    printf 'WARN swiftly suggests these system packages (the vphone-cli build does not need them):\n' >&2
     sed 's/^/    /' "$tmp" >&2; echo >&2
   fi
   rm -f "$tmp"

@@ -5,7 +5,8 @@
 # container). One unknown name makes dnf/apt install nothing at all, so a renamed or dropped
 # package must fail there before it fails on a user's PC.
 
-# Fedora (and RHEL-likes): the tested reference.
+# Fedora (and RHEL-likes): the tested reference. The last line is what swiftly lists for the
+# Swift toolchain on Fedora.
 FEDORA_PKGS=(git gcc gcc-c++ clang lld binutils make cmake ninja-build meson
   python3 python3-pillow rsync glib2-devel pixman-devel lzfse-devel libslirp-devel
   libssh-devel libzstd-devel nettle-devel gnutls-devel gtk3-devel
@@ -14,7 +15,8 @@ FEDORA_PKGS=(git gcc gcc-c++ clang lld binutils make cmake ninja-build meson
   socat gdb perf unzip curl zstd
   usbip fuse-sshfs fuse3 7zip kernel-devel
   libusb1-devel libplist-devel libimobiledevice-glue-devel openssl-devel libcurl-devel
-  libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel)
+  libimobiledevice-devel libusbmuxd-devel libtatsu-devel libarchive-devel
+  zip libedit-devel sqlite-devel libuuid-devel python3-devel libstdc++-static)
 
 # Debian 13+, Ubuntu 25.04+, Mint... setup.sh adds usbip where the distro packages it (Debian), or
 # linux-tools-generic where it ships it instead (Ubuntu), and linux-headers-generic (or WSL's
@@ -30,7 +32,7 @@ DEBIAN_PKGS=(git gcc g++ clang lld binutils make cmake ninja-build meson
   libvulkan-dev mesa-vulkan-drivers vulkan-tools
   socat gdb hwdata
   sshfs fuse3 7zip bc flex bison libelf-dev
-  binutils-gold zip gnupg2 libpython3-dev libxml2-dev libncurses-dev libz3-dev
+  binutils-gold zip gnupg2 libpython3-dev libxml2-dev libncurses-dev libz3-dev libedit-dev libsqlite3-dev
   libusb-1.0-0-dev libplist-dev libimobiledevice-glue-dev libssl-dev libcurl4-openssl-dev
   libimobiledevice-dev libusbmuxd-dev libtatsu-dev libarchive-dev)
 

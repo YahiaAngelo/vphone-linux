@@ -103,6 +103,7 @@ pkg_feeds() {
 # loaded at boot and usable by the user, and vm.max_map_count high enough for reims-vgpu's
 # guest-memory mappings (Arch already ships 1048576).
 host_settings() {
+  sudo mkdir -p /etc/sysctl.d /etc/modules-load.d /etc/udev/rules.d
   if [ "$(cat /proc/sys/vm/max_map_count)" -lt 1048576 ]; then
     log " Setting vm.max_map_count = 1048576 (/etc/sysctl.d/90-vphone.conf)"
     echo 'vm.max_map_count = 1048576' | sudo tee /etc/sysctl.d/90-vphone.conf >/dev/null
