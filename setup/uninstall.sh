@@ -11,13 +11,15 @@
 #   ./setup/uninstall.sh --all       # everything above: --vms --downloads, one question, then -y
 #
 # Removed:
-#   - system packages only vphone-linux uses (lzfse, libxml2-legacy, libimobiledevice...),
-#     and any others setup.sh recorded installing (~/.local/state/vphone-linux/packages.txt),
-#     except those another installed package still needs;
-#   - Swift and swiftly, and the swift/swiftc/swiftly commands in ~/.local/bin;
+#   - the system packages setup.sh recorded installing (~/.local/state/vphone-linux/packages.txt),
+#     except those another installed package still needs; packages only vphone-linux uses
+#     (lzfse, libxml2-legacy, libimobiledevice...) that were not recorded (a setup.sh older than
+#     the record, or your own) are offered separately, asked even with -y;
+#   - Swift and swiftly, and the swift/swiftc/swiftly commands in ~/.local/bin (a swiftly
+#     setup.sh did not record installing is asked about even with -y, as it may be yours);
 #   - rcodesign, and rustup only if setup.sh installed it;
 #   - this checkout's build output (QEMU, reims-vgpu, linux-create, apfs.ko, usbmuxd);
-#   - swiftly's lines in your shell profiles (a .bak copy is kept);
+#   - swiftly's lines in your shell profiles, when swiftly is removed (a .bak copy is kept);
 #   - the vphone sysctl / vhost-vsock config files from docs/SETUP.md, if present.
 # Kept: the checkout's sources; your VMs unless --vms; downloads unless --downloads.
 # Even --all keeps packages other apps need, and a rustup you installed yourself.
@@ -52,7 +54,7 @@ if [ "$ALL" = 1 ] && [ "$DRY" = 0 ]; then
   warn "--all deletes vphone-linux's build output, Swift, its packages, your VMs and every download."
   # Asked even with -y; after this, nothing else is asked (the package manager may still confirm).
   VSETUP_ASSUME_YES=0 confirm "Delete everything?" || die "nothing was changed"
-  VSETUP_ASSUME_YES=1
+  export VSETUP_ASSUME_YES=1
 fi
 
 SRC=$(cd "$VSETUP_SRC" && pwd)
@@ -79,17 +81,29 @@ for cmd in swift swiftc; do  # only the wrappers setup wrote, never a swift you 
 done
 f=$HOME/.local/bin/swiftly
 [ -L "$f" ] && case $(readlink "$f") in */swiftly/bin/swiftly) links+=("$f") ;; esac
+tools=$(cat "$VSETUP_STATE/tools.txt" 2>/dev/null || true)
+swift_removed=0
 if [ ${#swiftfiles[@]} -gt 0 ] || [ ${#links[@]} -gt 0 ]; then
   log "Swift and swiftly:"; printf '   %s\n' "${swiftfiles[@]}" "${links[@]}"
-  if ask "Remove Swift and swiftly (every installed toolchain)?"; then
-    run rm -rf "${swiftfiles[@]}" "${links[@]}"
+  if grep -qx swiftly <<<"$tools"; then
+    if ask "Remove Swift and swiftly (every installed toolchain)?"; then
+      run rm -rf "${swiftfiles[@]}" "${links[@]}"; swift_removed=1
+    fi
+  else
+    warn "setup.sh has no record of installing swiftly: it may be yours (or from a setup.sh older than the record)"
+    if [ "$DRY" = 0 ] && VSETUP_ASSUME_YES=0 confirm "Remove Swift and swiftly anyway (every installed toolchain)?"; then
+      run rm -rf "${swiftfiles[@]}" "${links[@]}"; swift_removed=1
+    elif [ ${#links[@]} -gt 0 ] && ask "Remove only the swift/swiftc/swiftly commands setup put in ~/.local/bin?"; then
+      run rm -f "${links[@]}"
+    fi
   fi
 fi
 
 # swiftly's lines in shell profiles (they source an env.sh that is now gone)
 for prof in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc" \
             "$HOME/.config/fish/conf.d/swiftly.fish" "$HOME/.config/fish/config.fish"; do
-  [ -f "$prof" ] && grep -qE 'swiftly/env\.(sh|fish)|# Added by swiftly' "$prof" || continue
+  [ "$swift_removed" = 1 ] || [ "$DRY" = 1 ] || break
+  if ! { [ -f "$prof" ] && grep -qE 'swiftly/env\.(sh|fish)|# Added by swiftly' "$prof"; }; then continue; fi
   log "swiftly lines in $prof:"; grep -nE 'swiftly/env\.(sh|fish)|# Added by swiftly' "$prof" | sed 's/^/   /'
   if ask "Remove them (a copy is kept as $prof.bak)?"; then
     run cp "$prof" "$prof.bak"
@@ -98,7 +112,6 @@ for prof in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profi
 done
 
 # ------------------------------------------------------------- Rust tools ---
-tools=$(cat "$VSETUP_STATE/tools.txt" 2>/dev/null || true)
 if have cargo && cargo install --list 2>/dev/null | grep -q '^apple-codesign '; then
   if grep -qx rcodesign <<<"$tools"; then
     log "rcodesign was installed by setup.sh"
@@ -137,8 +150,9 @@ required_by() {
 }
 
 current=$(installed_pkgs)
+recorded=$(cat "$VSETUP_STATE/packages.txt" 2>/dev/null || true)
 cands=()
-for p in $( { cat "$VSETUP_STATE/packages.txt" 2>/dev/null || true; vphone_only_pkgs | tr ' ' '\n'; } | sort -u); do
+for p in $( { printf '%s\n' "$recorded"; vphone_only_pkgs | tr ' ' '\n'; } | grep -v '^$' | sort -u); do
   grep -x "$p" <<<"$current" >/dev/null && cands+=("$p")
 done
 # Keep any candidate another installed package needs; a candidate needed only by
@@ -156,14 +170,23 @@ while [ "$changed" = 1 ]; do
     done
   done
 done
-pkgs=(); kept=()
+pkgs=(); unrecorded=(); kept=()
 for p in "${cands[@]}"; do
-  if [ -n "${keep_why[$p]:-}" ]; then kept+=("$p (needed by ${keep_why[$p]})"); else pkgs+=("$p"); fi
+  if [ -n "${keep_why[$p]:-}" ]; then kept+=("$p (needed by ${keep_why[$p]})")
+  elif grep -qx "$p" <<<"$recorded"; then pkgs+=("$p")
+  else unrecorded+=("$p"); fi
 done
+# Packages only vphone-linux uses that setup.sh did not record installing: offered, asked even
+# with -y, since they may be yours (setup.sh before the record installed them unrecorded).
+if [ ${#unrecorded[@]} -gt 0 ]; then
+  log "Packages only vphone-linux uses, with no record of setup.sh installing them (they may be yours):"
+  printf '%s\n' "${unrecorded[@]}" | paste -sd' ' | fold -s -w 96 | sed 's/^/   /'
+  if [ "$DRY" = 1 ] || VSETUP_ASSUME_YES=0 confirm "Remove these too?"; then pkgs+=("${unrecorded[@]}"); fi
+fi
 
 [ ${#kept[@]} -gt 0 ] && { log "Kept, other installed packages need them:"; printf '   %s\n' "${kept[@]}"; }
 if [ ${#pkgs[@]} -gt 0 ]; then
-  log "System packages only vphone-linux uses or setup.sh installed (${#pkgs[@]}):"
+  log "System packages to remove (${#pkgs[@]}):"
   printf '%s\n' "${pkgs[@]}" | paste -sd' ' | fold -s -w 96 | sed 's/^/   /'
   if ask "Remove them? (the package manager lists everything and asks again)"; then
     case $(distro_family) in
@@ -191,7 +214,7 @@ fi
 if [ -d "$VSETUP_DEVICES" ]; then
   if [ "$VMS" = 1 ]; then
     log "VMs: $VSETUP_DEVICES ($(du -sh "$VSETUP_DEVICES" 2>/dev/null | cut -f1))"
-    ls -1 "$VSETUP_DEVICES" 2>/dev/null | sed 's/^/   /'
+    find "$VSETUP_DEVICES" -mindepth 1 -maxdepth 1 -printf '   %f\n' 2>/dev/null
     # Asked even with -y (but not after --all's question): this deletes the VMs themselves.
     if [ "$DRY" = 1 ] || [ "$ALL" = 1 ] || { VSETUP_ASSUME_YES=0 confirm "Delete every VM in $VSETUP_DEVICES?"; }; then
       run rm -rf "$VSETUP_DEVICES"
@@ -208,7 +231,7 @@ mapfile -t dls < <(existing "$HOME/.cache/vphone" "$VSETUP_RELEASE")
 if [ ${#dls[@]} -gt 0 ]; then
   if [ "$DL" = 1 ]; then
     log "Downloads ($(du -shc "${dls[@]}" 2>/dev/null | tail -1 | cut -f1)):"
-    for d in "${dls[@]}"; do printf '   %s\n' "$d"; ls -1 "$d" 2>/dev/null | sed 's/^/     /'; done
+    for d in "${dls[@]}"; do printf '   %s\n' "$d"; find "$d" -mindepth 1 -maxdepth 1 -printf '     %f\n' 2>/dev/null; done
     if ask "Delete the downloads (create-vm.sh fetches them again next time)?"; then run rm -rf "${dls[@]}"; fi
   else
     log "Kept the downloads (delete them with --downloads):"; printf '   %s\n' "${dls[@]}"
