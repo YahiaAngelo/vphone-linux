@@ -112,6 +112,9 @@ for prof in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profi
 done
 
 # ------------------------------------------------------------- Rust tools ---
+# rustup's tools are on PATH only in shells that sourced its env file (setup.sh sources it itself).
+# shellcheck disable=SC1091  # rustup's env file, outside this checkout
+if ! have cargo && [ -r "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 if have cargo && cargo install --list 2>/dev/null | grep -q '^apple-codesign '; then
   if grep -qx rcodesign <<<"$tools"; then
     log "rcodesign was installed by setup.sh"
