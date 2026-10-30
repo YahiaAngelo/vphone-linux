@@ -11,8 +11,14 @@ shm=$(df -BG --output=avail /dev/shm | tail -1 | tr -dc 0-9)
 if command -v vulkaninfo >/dev/null; then
   g=$(vulkaninfo --summary 2>/dev/null | awk -F= '/deviceName/{print $2; exit}')
   if [ -z "$g" ]; then warn "vulkaninfo found no Vulkan GPU"
-  elif vulkaninfo --summary 2>/dev/null | grep -q 'PHYSICAL_DEVICE_TYPE_\(DISCRETE\|INTEGRATED\|VIRTUAL\)_GPU'; then pass "Vulkan GPU:$g"
-  else warn "the only Vulkan device is a CPU renderer ($g): install your GPU's Vulkan driver (Arch: nvidia-utils, vulkan-radeon or vulkan-intel); in a VM, the host must pass Vulkan through (virtio-gpu Venus)"; fi
+  elif ! vulkaninfo --summary 2>/dev/null | grep -q 'PHYSICAL_DEVICE_TYPE_\(DISCRETE\|INTEGRATED\|VIRTUAL\)_GPU'; then
+    warn "the only Vulkan device is a CPU renderer ($g): install your GPU's Vulkan driver (Arch: nvidia-utils, vulkan-radeon or vulkan-intel); in a VM, the host must pass Vulkan through (virtio-gpu Venus)"
+  elif ! ( for icd in /usr/share/vulkan/icd.d/*.json; do
+             case $icd in *lvp_icd*) continue ;; esac
+             VK_DRIVER_FILES=$icd vulkaninfo 2>/dev/null | grep -q VK_EXT_external_memory_host && exit 0
+           done; exit 1 ); then
+    warn "Vulkan GPU:$g lacks VK_EXT_external_memory_host, which reims-vgpu needs to map the guest's memory (a VM's virtio-gpu Venus has none: reims-vgpu stops at newBufferWithBytesNoCopy)"
+  else pass "Vulkan GPU:$g"; fi
 else warn "vulkaninfo not installed (package vulkan-tools); can't check the GPU"; fi
 [ -r /dev/vhost-vsock ] && [ -w /dev/vhost-vsock ] && pass "/dev/vhost-vsock usable" \
   || warn "/dev/vhost-vsock missing or not read/write for you (sudo modprobe vhost_vsock; see docs/SETUP.md)"
