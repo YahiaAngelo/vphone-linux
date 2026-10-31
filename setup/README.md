@@ -11,6 +11,11 @@ and keep all state in `~/vphone-setup-work/` plus one directory per VM.
 
 # step 2 — interactive device + iOS version menus, then the full create flow
 ./setup/create-vm.sh
+
+# later — start a VM create-vm.sh made (window + unlock), and stop it
+./setup/start-vm.sh                 # NAME, or a menu when there are several
+./setup/start-vm.sh --stop
+./setup/start-vm.sh --list
 ```
 
 Non-interactive:
