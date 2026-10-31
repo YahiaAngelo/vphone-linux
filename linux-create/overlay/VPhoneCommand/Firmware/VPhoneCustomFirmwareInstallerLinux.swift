@@ -187,6 +187,10 @@ extension VPhoneCustomFirmwareInstaller {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.hinge)
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.foldGuard)
         }
+        if Self.isFoldable(device) {
+            // The display-node strip leaves a foldable's panels.
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootDisplayNodes)
+        }
         if !device.usesTVOS {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.tvTPRO)
         }

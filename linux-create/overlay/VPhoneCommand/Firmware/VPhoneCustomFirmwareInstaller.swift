@@ -617,6 +617,10 @@ struct VPhoneCustomFirmwareInstaller {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.hinge)
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.foldGuard)
         }
+        if Self.isFoldable(device) {
+            // vphone-linux: the display-node strip leaves a foldable's panels.
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootDisplayNodes)
+        }
         if !device.usesTVOS {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.tvTPRO)
         }
@@ -3508,7 +3512,11 @@ struct VPhoneCustomFirmwareInstaller {
                                 boardDeviceTree.map { [$0.path] } ?? []))
         }
         repairGroup.append((FirmwareGuestSystemPatchSet.prebootHaptics, "patch-dt-haptics", []))
-        repairGroup.append((FirmwareGuestSystemPatchSet.prebootDisplayNodes, "patch-dt-display-nodes", []))
+        // vphone-linux: a foldable guest keeps its panel nodes for the fold
+        // patches above (see DeviceTreePatcher.removeSecondaryDisplays).
+        if !Self.isFoldable(guestDevice) {
+            repairGroup.append((FirmwareGuestSystemPatchSet.prebootDisplayNodes, "patch-dt-display-nodes", []))
+        }
         repairGroup.append((FirmwareGuestSystemPatchSet.prebootMicrophoneArray, "patch-dt-microphone-array", []))
         let repairsOn = repairGroup.filter { enabled($0.id) }
         for off in repairGroup where !enabled(off.id) {

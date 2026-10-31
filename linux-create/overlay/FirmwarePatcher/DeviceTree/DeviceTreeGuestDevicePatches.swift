@@ -605,9 +605,19 @@ extension DeviceTreePatcher {
     /// black while the guest renders). The panel the VM has is display 0,
     /// whose geometry the board's own `display-index` 0 node describes.
     ///
+    /// A foldable guest's tree (the board's own sub-type, or the VM one the
+    /// sub-type repair writes) keeps its panels: vphone-cli 2.14's fold
+    /// patches (`preboot-cfw-devicetree_foldable_displays`,
+    /// `system-springboard-cfw-fold_display`) need the inner panel's node,
+    /// and with the foldable product identity SpringBoard expects two panels.
+    ///
     /// Returns the serialized removed nodes, or nil when the tree has no
-    /// secondary display.
+    /// secondary display or is a foldable guest's.
     static func removeSecondaryDisplays(from root: DTNode) -> Data? {
+        let subtypes = rootSubtypes(of: root)
+        if subtypes.contains(where: CustomFirmwarePostRestoreDeviceTree.foldableSubtypes.contains) {
+            return nil
+        }
         var removed: [Data] = []
 
         func isSecondaryDisplay(_ node: DTNode) -> Bool {
