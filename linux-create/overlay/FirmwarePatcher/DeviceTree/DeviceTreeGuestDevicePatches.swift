@@ -393,6 +393,124 @@ extension DeviceTreePatcher {
         return (nil, value)
     }
 
+    // MARK: - Foldable product identity
+
+    /// The 20-byte product token of a foldable board's own tree. CoreMotion
+    /// selects its motion capabilities from this token — the hinge-angle
+    /// manager among them — and the frameworks' `isV68` checks key on it; the
+    /// VM platform's token selects none. Accept a retained donor IM4P or its
+    /// decoded flat payload, never a token invented from the product name.
+    public static func foldableProductID(from data: Data) throws -> Data {
+        let payload: Data
+        if let im4p = try? IM4P(data) {
+            guard im4p.fourcc == "dtre", !im4p.isEncrypted else {
+                throw PatcherError.invalidFormat("Foldable product: expected an unencrypted dtre IM4P")
+            }
+            payload = try im4p.payload()
+        } else {
+            payload = data
+        }
+        let parser = DeviceTreePatcher(data: payload, verbose: false)
+        return try foldableProductID(from: parser.parsePayload(payload))
+    }
+
+    static func foldableProductID(from source: DTNode) throws -> Data {
+        let subtypes = rootSubtypes(of: source)
+        guard subtypes.count == 1,
+              CustomFirmwarePostRestoreDeviceTree.foldableVMSubtypes.keys.contains(subtypes[0])
+        else {
+            throw PatcherError.invalidFormat(
+                "Foldable product: expected a foldable board tree, not \(subtypes.isEmpty ? "no sub-type" : subtypes.joined(separator: ", "))",
+            )
+        }
+        let product = try child(of: source, named: "product")
+        let properties = product.properties.filter { $0.name == "product-id" }
+        guard properties.count == 1, let property = properties.first,
+              property.flags == 0, property.value.count == 20
+        else {
+            throw PatcherError.invalidFormat("Foldable product: donor product-id must be one concrete 20-byte value")
+        }
+        return property.value
+    }
+
+    /// Replace the installed tree's product token with the foldable board's
+    /// own. The installed tree must itself be a foldable guest — the board's
+    /// own sub-type or the VM value the sub-type repair writes — so a
+    /// foldable board's token never reaches another guest. A tree that
+    /// already carries the token, or is not a foldable guest, comes back
+    /// unchanged.
+    static func presentFoldableProductID(in root: DTNode, from source: DTNode) throws -> (before: Data?, after: Data)? {
+        let subtypes = rootSubtypes(of: root)
+        guard subtypes.count == 1,
+              CustomFirmwarePostRestoreDeviceTree.foldableSubtypes.contains(subtypes[0])
+        else { return nil }
+        let value = try foldableProductID(from: source)
+        let product = try child(of: root, named: "product")
+        guard product.properties.filter({ $0.name == "product-id" }).count <= 1 else {
+            throw PatcherError.invalidFormat("Foldable product: installed product-id is duplicated")
+        }
+        if let existing = product.properties.first(where: { $0.name == "product-id" }) {
+            guard existing.value != value || existing.flags != 0 else { return nil }
+            let before = existing.value
+            existing.value = value
+            existing.flags = 0
+            return (before, value)
+        }
+        product.properties.append(DTProperty(name: "product-id", flags: 0, value: value, valueOffset: 0))
+        return (nil, value)
+    }
+
+    /// Give a foldable guest's `/product` the board's panel nodes.
+    ///
+    /// A foldable board describes each panel in a `/product` child carrying
+    /// `surface-type` (V68AP: `display0` the cover, `display1` the inner
+    /// panel): rotation, scale, corner radii, chrome and framebuffer
+    /// identifiers, camera and button geometry. MobileGestalt counts those
+    /// children for `MGGetLogicalDeviceDisplayCount` and reads them into
+    /// `DisplayExtendedProperties`, which QuartzCore hands each hardware
+    /// display as its `extendedProperties`. vphone600 has no such child, so
+    /// the guest reports one display and no properties. Each node is copied
+    /// with every property, `AAPL,phandle` renumbered above the tree's
+    /// highest, and they go first under `/product` in the board's order. Like
+    /// the product token, they reach only a foldable guest. Returns the added
+    /// nodes serialized, empty when the tree already has panel nodes or is
+    /// not a foldable guest.
+    static func presentFoldableDisplays(in root: DTNode, from source: DTNode) throws -> [Data] {
+        let subtypes = rootSubtypes(of: root)
+        guard subtypes.count == 1,
+              CustomFirmwarePostRestoreDeviceTree.foldableSubtypes.contains(subtypes[0])
+        else { return [] }
+        func isPanel(_ node: DTNode) -> Bool {
+            node.properties.contains { $0.name == "surface-type" }
+        }
+        let panels = try child(of: source, named: "product").children.filter(isPanel)
+        guard panels.count >= 2 else {
+            throw PatcherError.invalidFormat("Foldable displays: the board's /product has \(panels.count) panel nodes, not two")
+        }
+        let product = try child(of: root, named: "product")
+        guard !product.children.contains(where: isPanel) else { return [] }
+        var phandle = maximumPhandle(in: root)
+        let nodes = panels.map { panel in
+            phandle += 1
+            let number = phandle
+            let node = DTNode()
+            node.properties = panel.properties.map { property in
+                let value = property.name == "AAPL,phandle"
+                    ? withUnsafeBytes(of: number.littleEndian) { Data($0) } : property.value
+                return DTProperty(name: property.name, flags: property.flags, value: value, valueOffset: 0)
+            }
+            return node
+        }
+        product.children.insert(contentsOf: nodes, at: 0)
+        return nodes.map(serialize)
+    }
+
+    private static func rootSubtypes(of node: DTNode) -> [String] {
+        node.properties
+            .filter { $0.name == "target-sub-type" }
+            .compactMap { String(data: $0.value.prefix { $0 != 0 }, encoding: .utf8) }
+    }
+
     /// What `presentBoardAudio` changed: the audio node's serialized bytes
     /// before and after, empty when there was no node.
     struct BoardAudioChange {

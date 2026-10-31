@@ -163,7 +163,8 @@ extension VPhoneCustomFirmwareInstaller {
             plan: plan,
             priorGuest: priorGuest,
             guestDevice: device,
-            includeIdentity: mode == .full,
+            includeIdentity: mode == .full
+                || plan?.isEnabled(FirmwareGuestIdentityPatchSet.prebootDeviceTreeIdentity) == true,
             buildVersion: buildVersion,
             boardDeviceTree: boardDeviceTree,
         ))
@@ -172,8 +173,22 @@ extension VPhoneCustomFirmwareInstaller {
         if !device.presentsBoard {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootBoardAudio)
         }
-        if device.isPad {
+        // As the macOS path's list (VPhoneCustomFirmwareInstaller.swift).
+        if device.family != .iPhone {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootIPhoneProduct)
+        }
+        if device.family != .homePod {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.homePodAudioProduct)
+        }
+        if !Self.isFoldable(device) {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableVMSubtype)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableProductId)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableDisplays)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.hinge)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.foldGuard)
+        }
+        if !device.usesTVOS {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.tvTPRO)
         }
         if buildVersion?.isEmpty ?? true {
             notApplicableGuest.insert("system-systemversion-cfw-build_version")

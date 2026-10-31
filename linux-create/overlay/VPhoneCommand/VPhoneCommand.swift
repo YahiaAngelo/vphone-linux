@@ -47,12 +47,13 @@ struct PatchFirmwareCommand: ParsableCommand {
 
     @Option(
         name: .customLong("preset"),
-        help: "Patch preset to apply. Defaults to standard. Individual patches are selected per VM by `fw patch`, not here.",
+        help: "Patch preset name, or path to a preset plist, to apply. Defaults to standard. Individual patches are selected per VM by `fw patch`, not here.",
     )
     var preset: String = VPhonePatchPreset.standardIdentifier
 
     mutating func run() throws {
-        guard let resolved = FirmwarePatchSetCatalog.builtInPresets.first(where: { $0.identifier == preset })
+        let file = try VPhonePatchPresetStore.isPresetFile(preset) ? VPhonePatchPresetStore.readPresetFile(preset) : nil
+        guard let resolved = file ?? FirmwarePatchSetCatalog.builtInPresets.first(where: { $0.identifier == preset })
         else {
             let available = FirmwarePatchSetCatalog.builtInPresets.map(\.identifier)
             throw ValidationError(
