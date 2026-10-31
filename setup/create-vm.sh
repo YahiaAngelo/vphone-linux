@@ -101,7 +101,7 @@ fi
 NAME=${NAME:-vphone-${DEVICE//,/-}-${IOS//./}}
 VM=$VSETUP_DEVICES/$NAME
 STATE=$VM/.create-state
-[ "$DRY" = 1 ] || mkdir -p "$VM"
+[ "$DRY" = 1 ] || { mkdir -p "$VM"; printf '%s\n' "$CID" > "$VM/cid"; }   # for start-vm.sh
 
 # iOS 27 does not go below 2x (docs/ADVANCED.md "Display scale").
 case $IOS in
@@ -483,6 +483,6 @@ if [ "$DRY" = 1 ]; then
   log "Dry run complete — no command executed."
 else
   log "VM '$NAME' is up and unlocked (Auto-Lock: Never). Later:"
-  log "  start:  GFX=1 WINDOW=1 CID=$CID $QEMU_RUN $VM"
-  log "  stop:   CID=$CID $T/vphoned.sh POST /v1/rpc '{\"method\":\"system.shutdown\",\"params\":{\"force\":true},\"id\":1}'"
+  log "  start:  ./setup/start-vm.sh $NAME"
+  log "  stop:   ./setup/start-vm.sh --stop $NAME   (or close its window)"
 fi

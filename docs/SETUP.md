@@ -243,7 +243,8 @@ lists yours.
 sudo nvidia-smi --lock-gpu-clocks=2000,3105 && sudo nvidia-smi --lock-memory-clocks=10000,11501
 ```
 
-Start the VM:
+Start the VM (a VM made by `setup/create-vm.sh` starts with `./setup/start-vm.sh`, which does
+this and the unlock below for you):
 
 ```sh
 GFX=1 WINDOW=1 ./run-vphone.sh vms/myphone

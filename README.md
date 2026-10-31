@@ -123,6 +123,14 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ./setup/create-vm.sh                # pick a device and an iOS version; it creates the VM
 ```
 
+`create-vm.sh` leaves the new VM running and unlocked. **To use it again later**:
+
+```sh
+./setup/start-vm.sh                 # starts it in its window and unlocks it (a menu if you have several)
+./setup/start-vm.sh --stop          # shuts iOS down (closing the window powers it off too)
+./setup/start-vm.sh --list          # your VMs, and which are running
+```
+
 `create-vm.sh` menus down to a tested device/iOS pairing, runs the whole create flow
 (`fw prepare` + `fw patch`, the DFU restore, the SSH-ramdisk CFW install, the snapshot flip),
 keeps one state file per VM so a re-run resumes after a failed step, and starts QEMU exactly once
