@@ -76,6 +76,14 @@ if [ "${GFX:-0}" = 1 ]; then
   machine+=",gfx-device=apple-gfx-mmio,memory-backend=ram0,gfx-modes=${GFX_MODES:-$GFX_RES@60}"
   # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
   # per-task processes map guest RAM in whole guest pages (memfd has no align)
+  # The guest's RAM lives in /dev/shm (a tmpfs, by default half the host's RAM). If it fills
+  # up, the guest's next new page kills QEMU with SIGBUS and no message: check first.
+  need=$(numfmt --from=iec "$MEM") shm=$(( $(stat -f -c '%a * %S' /dev/shm) ))
+  if [ "$need" -gt "$shm" ]; then
+    echo "run-vphone.sh: /dev/shm has $(numfmt --to=iec "$shm") free, the guest's RAM needs $MEM." >&2
+    echo "  Free it up (other VMs, browsers), or enlarge it: sudo mount -o remount,size=12G /dev/shm" >&2
+    exit 1
+  fi
   args+=(-object "memory-backend-file,id=ram0,size=$MEM,mem-path=/dev/shm,share=on,align=2M"
          -global apple-gfx-mmio.resolution=$GFX_RES
          -global apple-gfx-mmio.process-isolation=${GFX_ISOLATION:-on})

@@ -89,7 +89,7 @@ Tested guest pairings on Linux:
   (2026-10-19); later TCG work made indirect-branch lookups and TLB refills much cheaper.
   Scrolling Settings now runs at about 60-68 frames/s on average, with occasional 50-110 ms stalls
   (guest CPU work at emulated speed).
-- Creating the VM needs root for several steps, about 45 GB free disk, and about an hour plus the
+- Creating the VM needs root for several steps, about 60 GB free disk, and about an hour plus the
   downloads ([docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md)).
 - Only the NVIDIA host GPU has been tested. reims-vgpu documents what AMD GPUs need (`/dev/udmabuf`).
 - vphoned's `GET /v1/files/content` stops after 64 KiB on the default vhost-vsock datapath; use
@@ -103,7 +103,8 @@ Tested guest pairings on Linux:
 ## Quick start
 
 You need a Linux x86_64 PC with a Vulkan GPU (NVIDIA tested), 16 GB RAM or more, about 100 GB free
-disk, and sudo. No Mac. **Two steps**:
+disk (the tools and builds, about 11 GB of firmware, a VM of 20-25 GB, and room to make it; `create-vm.sh`
+checks), and sudo. No Mac. **Two steps**:
 
 ```sh
 git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
