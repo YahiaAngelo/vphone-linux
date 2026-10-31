@@ -133,6 +133,27 @@ SpringBoard".** iOS rebooted itself into recovery, and every later boot goes the
 holds 127.0.0.1:3240 for a VM that is gone. The current `dfu-up.sh` stops every old
 `vusb-usbip.py` first.
 
+**`ERROR the SSH ramdisk did not answer in 30 min`** (the cfw step). Every 5 minutes the wait
+prints what it sees: the Apple USB devices on the host, the devices usbmuxd knows, ssh's last error
+and the guest's last serial line. Read them in that order:
+- No `05ac:12a8` on the host: the ramdisk has not booted, or the attach loop missed it. Check that
+  `sudo tools/usbip-autoattach.sh` is still running (`/tmp/vphone-usbip-autoattach.log` should end
+  with `05ac:12a8` attached) and the end of `VM/.runs-sshrd/serial.log`.
+- `05ac:12a8` attached but usbmuxd lists nothing: the 32 KiB usbmuxd is not the one running.
+  Run `sudo tools/usbmuxd-32k.sh` again and read `/tmp/usbmuxd-32k.log`.
+- usbmuxd lists it but ssh fails: the error is in `VM/.runs-sshrd/ssh-wait.log`.
+`fw patch's manifest refresh failed after patching TXM; continuing` just before it is expected and
+harmless: `restore-tree-mode.sh` sets those digests itself. A re-run stops the QEMU an earlier
+attempt left behind.
+
+**The first boot's window disappears and setup keeps waiting for vphoned.** QEMU stopped. The guest's
+RAM is a file in `/dev/shm`, a tmpfs that holds half the host's RAM by default: when it fills, QEMU
+dies with no message once the guest touches enough memory.
+`df -h /dev/shm` must show at least 8 GB free; `run-vphone.sh` now refuses to start otherwise.
+Enlarge it with `sudo mount -o remount,size=12G /dev/shm`. Also check
+`journalctl -k | grep -i -E 'oom|qemu'` for the out-of-memory killer. The current `create-vm.sh`
+stops waiting when QEMU is gone and prints why.
+
 **iBEC panics with "Kernelcache image not valid" or "TXM image load failed" when booting the SSH
 ramdisk.** idevicerestore retypes restore images when it sends them (`krnl` → `rkrn`,
 `trxm` → `rtrx`), and iBoot checks each against the manifest digest of the retyped bytes. Use
