@@ -131,10 +131,12 @@ extension VPhoneCustomFirmwareInstaller {
                     "This VM has no CFW install to update. Run `vphone-cli cfw install` first.",
                 )
             }
+            // xART too: the SSH ramdisk step gave the gigalocker the UUID name its own seputil
+            // asks for, and the installed system's seputil looks for AA.gl again.
             liveGuest = try applyGuestPatches(
                 guestDevice: device,
                 system: systemRoot,
-                xart: nil,
+                xart: xartRoot,
                 restore: nil,
                 work: work,
                 owner: nil,
