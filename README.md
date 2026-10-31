@@ -169,7 +169,7 @@ The submodules are [qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone),
 reims-vgpu's `Cargo.toml` takes metal2vulkan from `../metal2vulkan`, so the submodules must stay side by
 side as above. vphone-cli is not a submodule: on a Mac it
 runs from its own releases, and `linux-create/sync-sources.sh` builds its firmware tooling from a
-vphone-cli 2.12.1 checkout without changing its files.
+vphone-cli 2.14.2 checkout without changing its files.
 
 ## Credits
 

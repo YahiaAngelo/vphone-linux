@@ -181,7 +181,7 @@ Every switch is listed in [PERFORMANCE.md](PERFORMANCE.md#launcher-switches).
 
 The steps are in [CREATE-ON-LINUX.md](CREATE-ON-LINUX.md). The parts:
 
-**vphone-cli on Linux** (`linux-create/`). A Swift package that builds vphone-cli 2.12.1's firmware
+**vphone-cli on Linux** (`linux-create/`). A Swift package that builds vphone-cli 2.14.2's firmware
 tooling (`fw prepare`, `fw patch`, `restore`, `cfw install`, `sign`) on Linux. `sync-sources.sh` links
 vphone-cli's own source files and adds Linux stand-ins for Apple modules (`Shims/`: Darwin, CryptoKit,
 Compression, MachO, ...), whole-file replacements (`overlay/`) and one-line sed edits (`edits/`).

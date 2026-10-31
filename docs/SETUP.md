@@ -180,16 +180,16 @@ linux-create/vphone-cli --help
 `sudo linux-create/vphone-cli ...` for the steps that need root.
 
 **vphone-cli's release files.** Download
-[VPhone-2.12.1.zip](https://github.com/Lakr233/vphone-cli/releases/download/2.12.1/VPhone-2.12.1.zip)
-from [vphone-cli's 2.12.1 release](https://github.com/Lakr233/vphone-cli/releases/tag/2.12.1). It is
+[VPhone-2.14.2.zip](https://github.com/Lakr233/vphone-cli/releases/download/2.14.2/VPhone-2.14.2.zip)
+from [vphone-cli's 2.14.2 release](https://github.com/Lakr233/vphone-cli/releases/tag/2.14.2). It is
 the macOS app; nothing in it runs here, but it carries the open-source boot ROMs (OpenAVB and OpenSEP)
 and the iPhone-side programs the VM gets (vphoned and others):
 
 ```sh
-curl -L -o .build/VPhone-2.12.1.zip https://github.com/Lakr233/vphone-cli/releases/download/2.12.1/VPhone-2.12.1.zip
-mkdir -p .build/vphone-release-2.12.1/app
-unzip -q .build/VPhone-2.12.1.zip -d .build/vphone-release-2.12.1/app
-R=.build/vphone-release-2.12.1/app/VPhone.bundle/Contents/Resources
+curl -L -o .build/VPhone-2.14.2.zip https://github.com/Lakr233/vphone-cli/releases/download/2.14.2/VPhone-2.14.2.zip
+mkdir -p .build/vphone-release-2.14.2/app
+unzip -q .build/VPhone-2.14.2.zip -d .build/vphone-release-2.14.2/app
+R=.build/vphone-release-2.14.2/app/VPhone.bundle/Contents/Resources
 ln -sfn $R/guest-resources guest-resources
 mkdir -p OpenAVB OpenSEP
 cp $R/OpenAVB/OpenAVB.bin OpenAVB/ && cp $R/OpenSEP/OpenSEP.bin OpenSEP/
