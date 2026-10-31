@@ -36,6 +36,7 @@ let package = Package(
         .target(name: "VLCoreGraphics", path: "Shims/VLCoreGraphics"),
         .target(name: "VLMachO", dependencies: [.product(name: "MachOKitC", package: "MachOKit")], path: "Shims/VLMachO"),
         .target(name: "VLCoreServices", path: "Shims/VLCoreServices"),
+        .target(name: "VLos", path: "Shims/VLos"),
         .target(name: "VLUniformTypeIdentifiers", path: "Shims/VLUniformTypeIdentifiers"),
         .systemLibrary(name: "VLzlib", path: "Shims/VLzlib"),
         .systemLibrary(name: "libarchive", path: "Shims/libarchive"),
@@ -70,6 +71,6 @@ let package = Package(
                                  .linkedLibrary("crypto")]),
         .target(name: "VPhoneRestore", dependencies: ["VLCryptoKit", "VLDarwin", "LinuxSys", "VLzlib", "MobileRestoreCore", "MobileRecoveryCore", "VPhoneCoreKit"],
                 path: "Sources/VPhoneRestore", swiftSettings: swift6),
-        .target(name: "FirmwarePatcher", dependencies: ["VLCryptoKit", "VLDarwin", "LinuxSys", "Img4tool", "VPhonePatchKit", "VPhoneCoreKit", "VPhoneSign", "VPhoneArchiveKit", .product(name: "MachOKit", package: "MachOKit")], path: "Sources/FirmwarePatcher", swiftSettings: swift6),
+        .target(name: "FirmwarePatcher", dependencies: ["VLCryptoKit", "VLDarwin", "LinuxSys", "Img4tool", "VPhonePatchKit", "VPhoneCoreKit", "VPhoneSign", "VPhoneArchiveKit", "VLos", .product(name: "MachOKit", package: "MachOKit")], path: "Sources/FirmwarePatcher", swiftSettings: swift6),
     ]
 )

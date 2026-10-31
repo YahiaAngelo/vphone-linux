@@ -13,8 +13,8 @@ VSETUP_SRC=${VSETUP_SRC:-$VSETUP_ROOT/..}                      # git checkout + 
 VSETUP_RELEASE=${VSETUP_RELEASE:-$HOME/vphone-setup-work/vphone-release}  # vphone-cli release zip tree
 VSETUP_DEVICES=${VSETUP_DEVICES:-$HOME/vphone-setup-work/devices}         # created VM bundles ("library")
 VSETUP_DATA=${VSETUP_DATA:-$VSETUP_ROOT/data}
-VPHONE_CLI_VERSION=${VPHONE_CLI_VERSION:-2.13.4}
-VPHONE_CLI_PUBLIC=${VPHONE_CLI_PUBLIC:-2.13.4}                 # the pairing linux-create is synced against
+VPHONE_CLI_VERSION=${VPHONE_CLI_VERSION:-2.14.2}
+VPHONE_CLI_PUBLIC=${VPHONE_CLI_PUBLIC:-2.14.2}                 # the pairing linux-create is synced against
 VPHONE_CLI_REPO=https://github.com/Lakr233/vphone-cli.git
 VPHONE_LINUX_BRANCH=${VPHONE_LINUX_BRANCH:-development}        # the branch the sources clone checks out
 

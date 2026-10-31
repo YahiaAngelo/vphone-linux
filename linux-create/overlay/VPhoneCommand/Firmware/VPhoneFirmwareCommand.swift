@@ -20,6 +20,7 @@ struct VPhoneFirmwareCommand: ParsableCommand {
             VPhoneFirmwareKernelcacheCommand.self,
             VPhoneFirmwarePatchesCommand.self,
             VPhoneFirmwareSetPatchesCommand.self,
+            VPhoneFirmwareExportPresetCommand.self,
             VPhoneFirmwareManifestCommand.self,
             VPhoneFirmwareListCommand.self,
             VPhoneFirmwareResolveCommand.self,
@@ -263,9 +264,7 @@ struct VPhoneFirmwarePrepareCommand: ParsableCommand {
 
     func run() throws {
         let resources = projectRoot.map { VPhoneResources(base: URL(fileURLWithPath: $0)) } ?? .resolve()
-        let sourceGuide = resources.base.appendingPathComponent("Documents/Guides/compatibility.md")
-        let bundleGuide = resources.base.appendingPathComponent("docs/guides/compatibility.md")
-        let readme = FileManager.default.fileExists(atPath: sourceGuide.path) ? sourceGuide.path : bundleGuide.path
+        let readme = VPhoneFirmwareSourceSelection.compatibilityGuide(resources)
         let needsCatalog = list || iphoneVersion != nil || iphoneBuild != nil
         if let device, VPhoneGuestDevice.named(device) == nil {
             throw ValidationError("vphone runs \(VPhoneGuestDevice.known.map(\.productType).joined(separator: ", ")) guests, not \(device).")
@@ -279,15 +278,8 @@ struct VPhoneFirmwarePrepareCommand: ParsableCommand {
             throw ValidationError("--download-connections takes 1 to 16, not \(downloadConnections).")
         }
         let chosenDevice = device
-        // A device without an IPSW lists and resolves its restore base's.
-        let device = VPhoneGuestDevice.named(device)?.restoreBase?.productType ?? device ?? VPhoneFirmwareCatalog.device
-        let urls = if needsCatalog {
-            try vphoneRunBlocking {
-                try await VPhoneFirmwareIndex.restoreURLs(forDevice: device)
-            }.joined(separator: "\n")
-        } else {
-            ""
-        }
+        let device = VPhoneFirmwareSourceSelection.lookupDevice(device)
+        let urls = needsCatalog ? try VPhoneFirmwareSourceSelection.restoreURLs(forDevice: device) : ""
 
         if list {
             let code = VPhoneFirmwareMatrixCommandLine.list(
@@ -306,19 +298,13 @@ struct VPhoneFirmwarePrepareCommand: ParsableCommand {
             guard source == nil else {
                 throw ValidationError("Use either --iphone-source or --iphone-version/--iphone-build.")
             }
-            let selection = VPhoneFirmwareMatrix.selection(
+            source = try VPhoneFirmwareSourceSelection.release(
                 device: device,
-                version: iphoneVersion ?? "",
-                build: iphoneBuild ?? "",
-                readme: try? String(contentsOfFile: readme, encoding: .utf8),
+                version: iphoneVersion,
+                build: iphoneBuild,
+                readme: readme,
                 downloadURLs: urls,
-                style: .forStream(FileHandle.standardError.fileDescriptor),
-            )
-            switch selection {
-            case let .selected(release, _): source = release.url
-            case let .ambiguous(message), let .unmatched(message):
-                throw ValidationError(message.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
+            ).url
         }
 
         let selected = try VPhoneFirmwareSourceSelection.resolve(iphone: source, cloudos: cloudosSource, device: chosenDevice)
@@ -360,7 +346,7 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
     @Argument(help: "VM name") var name: String?
     @Option(
         name: .customLong("preset"),
-        help: "Patch preset to apply. Defaults to the VM's recorded choice, or standard.",
+        help: "Patch preset name, or path to a preset plist, to apply. Defaults to the VM's recorded choice, or standard.",
     )
     var preset: String?
     @Flag(name: .shortAndLong, help: "Suppress per-component progress") var quiet = false
@@ -409,15 +395,8 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
         // An explicit --preset wins and is remembered, so `cfw install` and a
         // later re-patch agree without the flag being repeated.
         var selection = VPhonePatchPresetStore.selection(forVM: directory)
-        if let preset {
-            selection.presetIdentifier = preset
-        }
-        guard let resolved = VPhonePatchPresetStore.preset(named: selection.presetIdentifier) else {
-            let available = VPhonePatchPresetStore.availablePresets().map(\.identifier)
-            throw ValidationError(
-                "Unknown patch preset '\(selection.presetIdentifier)'. Available: \(available.joined(separator: ", "))",
-            )
-        }
+        let (resolved, presetFile) = try VPhonePatchPresetStore.resolve(preset ?? selection.presetIdentifier, forVM: directory)
+        selection.presetIdentifier = resolved.identifier
 
         // The restore image patches merge and reseal the system image, which
         // needs root; nothing else here does.
@@ -475,6 +454,9 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
         let records = try pipeline.patchAll()
 
         if let plan = pipeline.resolvedPlan {
+            if preset != nil {
+                try VPhonePatchPresetStore.writePresetFile(presetFile, forVM: directory)
+            }
             try VPhonePatchPresetStore.write(selection, forVM: directory)
             try VPhonePatchPresetStore.write(
                 VPhoneVirtualMachinePatchPlan(
@@ -629,7 +611,7 @@ struct VPhoneFirmwarePatchesCommand: ParsableCommand {
 
     @OptionGroup var lib: VPhoneLibraryOption
     @Argument(help: "VM name, to report what it is set to") var name: String?
-    @Option(name: .customLong("preset"), help: "Report against this preset instead of the VM's choice")
+    @Option(name: .customLong("preset"), help: "Report against this preset name or preset plist path instead of the VM's choice")
     var preset: String?
     @Flag(name: .customLong("json"), help: "Emit machine-readable output for a UI")
     var json = false
@@ -639,23 +621,22 @@ struct VPhoneFirmwarePatchesCommand: ParsableCommand {
         var selection = VPhoneVirtualMachinePatchSelection()
         var vmName: String?
         var machine: VPhonePatchCatalogReport.MachineRecords?
+        var directory: URL?
         if let name {
             let resolvedName = try VPhoneVirtualMachineSelection.resolveExisting(name, in: lib.library)
             let bundle = try lib.library.bundle(named: resolvedName)
             vmName = resolvedName
+            directory = bundle.url
             selection = VPhonePatchPresetStore.selection(forVM: bundle.url)
             machine = .read(bundle)
         }
-        if let preset {
-            selection.presetIdentifier = preset
-        }
+        let active = try VPhonePatchPresetStore.resolve(preset ?? selection.presetIdentifier, forVM: directory).preset
+        selection.presetIdentifier = active.identifier
 
-        let presets = VPhonePatchPresetStore.availablePresets()
-        guard let active = presets.first(where: { $0.identifier == selection.presetIdentifier }) else {
-            throw ValidationError(
-                "Unknown patch preset '\(selection.presetIdentifier)'."
-                    + " Available: \(presets.map(\.identifier).joined(separator: ", "))",
-            )
+        // A VM's own preset is listed too, so a picker can show what it is set to.
+        var presets = VPhonePatchPresetStore.availablePresets()
+        if !presets.contains(where: { $0.identifier == active.identifier }) {
+            presets.append(active)
         }
 
         let report = VPhonePatchCatalogReport(
@@ -720,7 +701,7 @@ struct VPhoneFirmwareSetPatchesCommand: ParsableCommand {
     @Argument(help: "VM name") var name: String?
     @Option(
         name: .customLong("preset"),
-        help: "Preset the choice composes onto. Defaults to the VM's recorded preset.",
+        help: "Preset name, or path to a preset plist, the choice composes onto. Defaults to the VM's recorded preset.",
     )
     var preset: String?
     @Option(
@@ -739,15 +720,8 @@ struct VPhoneFirmwareSetPatchesCommand: ParsableCommand {
         let bundle = try lib.library.bundle(named: name)
 
         var selection = VPhonePatchPresetStore.selection(forVM: bundle.url)
-        if let preset {
-            selection.presetIdentifier = preset
-        }
-        guard let resolved = VPhonePatchPresetStore.preset(named: selection.presetIdentifier) else {
-            let available = VPhonePatchPresetStore.availablePresets().map(\.identifier)
-            throw ValidationError(
-                "Unknown patch preset '\(selection.presetIdentifier)'. Available: \(available.joined(separator: ", "))",
-            )
-        }
+        let (resolved, presetFile) = try VPhonePatchPresetStore.resolve(preset ?? selection.presetIdentifier, forVM: bundle.url)
+        selection.presetIdentifier = resolved.identifier
 
         let declarations = FirmwarePatchSetCatalog.allDeclarations
         let declared = Set(declarations.map(\.identifier))
@@ -779,6 +753,9 @@ struct VPhoneFirmwareSetPatchesCommand: ParsableCommand {
             ))
         }
 
+        if preset != nil {
+            try VPhonePatchPresetStore.writePresetFile(presetFile, forVM: bundle.url)
+        }
         try VPhonePatchPresetStore.write(selection, forVM: bundle.url)
         try VPhoneHostFilePermissions.makeAccessible(at: bundle.url)
         print("[fw set-patches] \(name): preset \(selection.presetIdentifier)"
@@ -825,6 +802,89 @@ struct VPhoneFirmwareSetPatchesCommand: ParsableCommand {
         ) {
             print(line)
         }
+    }
+}
+
+// MARK: - export-preset
+
+/// Writes a preset that is a VM's choice, or a choice not yet made into a VM,
+/// with its overrides folded into the selection: applied with none of its own,
+/// it resolves to the same patches.
+struct VPhoneFirmwareExportPresetCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "export-preset",
+        abstract: "Write a preset plist from a VM's patch choice, or from a preset and overrides",
+        discussion: """
+        With a VM named and no other option, its recorded preset and overrides
+        are exported. Otherwise --preset (default the VM's, or standard),
+        --block and --allow name the whole choice, as for fw set-patches; with
+        a VM named, a preset of its own resolves.
+
+        The new preset keeps the original's patch sets, parameters and summary.
+        Its identifier is the output file's name without .plist, and its title
+        the original's with ", modified". Pass the file to --preset to use it.
+        """,
+    )
+
+    @OptionGroup var lib: VPhoneLibraryOption
+    @Argument(help: "VM name, to export its choice") var name: String?
+    @Option(name: .customLong("preset"), help: "Preset name or preset plist path the choice composes onto")
+    var preset: String?
+    @Option(name: .customLong("block"), help: ArgumentHelp("A patch the preset turns on, turned off", valueName: "patch"))
+    var block: [String] = []
+    @Option(name: .customLong("allow"), help: ArgumentHelp("A patch the preset leaves off, turned on", valueName: "patch"))
+    var allow: [String] = []
+    @Option(name: [.customShort("o"), .customLong("output")], help: "The preset plist to write")
+    var output: String
+
+    func run() throws {
+        var directory: URL?
+        var record = VPhoneVirtualMachinePatchSelection()
+        if let name {
+            let bundle = try lib.library.bundle(named: VPhoneVirtualMachineSelection.resolveExisting(name, in: lib.library))
+            directory = bundle.url
+            record = VPhonePatchPresetStore.selection(forVM: bundle.url)
+        }
+        let original: VPhonePatchPreset
+        let blocked: Set<String>
+        let allowed: Set<String>
+        if name != nil, preset == nil, block.isEmpty, allow.isEmpty {
+            original = try VPhonePatchPresetStore.resolve(record.presetIdentifier, forVM: directory).preset
+            blocked = Set(record.blockedPatches)
+            allowed = Set(record.allowedPatches)
+        } else {
+            // As fw set-patches: the options name the whole choice, and a VM
+            // named with them is where a preset of its own resolves.
+            original = try VPhonePatchPresetStore.resolve(preset ?? record.presetIdentifier, forVM: directory).preset
+            blocked = Set(block)
+            allowed = Set(allow)
+            // A typo would otherwise export a selection naming nothing.
+            let unknown = blocked.union(allowed).subtracting(FirmwarePatchSetCatalog.allDeclarations.map(\.identifier)).sorted()
+            guard unknown.isEmpty else {
+                throw ValidationError("No patch declares \(unknown.joined(separator: ", ")). Run `fw patches` for the identifiers.")
+            }
+            let contradictory = blocked.intersection(allowed).sorted()
+            guard contradictory.isEmpty else {
+                throw ValidationError("\(contradictory.joined(separator: ", ")) cannot be both blocked and allowed.")
+            }
+        }
+
+        let url = URL(fileURLWithPath: (output as NSString).expandingTildeInPath)
+        let identifier = url.deletingPathExtension().lastPathComponent
+        guard url.pathExtension == "plist", !identifier.isEmpty, !VPhonePatchPresetStore.isPresetFile(identifier) else {
+            throw ValidationError("The output is a .plist file whose name, without .plist, is the preset's identifier.")
+        }
+        guard !VPhonePatchPresetStore.isShipped(identifier) else {
+            throw ValidationError("'\(identifier)' is a shipped preset's identifier; name the file something else.")
+        }
+
+        var exported = original
+        exported.identifier = identifier
+        exported.title = "\(original.title), modified"
+        // As VPhonePatchPlan.resolve composes a VM's overrides.
+        exported.selection = original.selection.allowing(allowed).blocking(blocked)
+        try exported.encodedPlist().write(to: url, options: .atomic)
+        print("[fw export-preset] wrote \(identifier) to \(url.path) (from \(original.identifier), \(blocked.count) off, \(allowed.count) on)")
     }
 }
 

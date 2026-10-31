@@ -28,14 +28,21 @@ public enum FirmwareGuestSystemPatchSet {
     public static let metalCacheReuseMarker = "/usr/lib/vphone-metal-cache-reuse"
     public static let gyroscope = "system-backboardd-cfw-gyroscope"
     public static let accelerometer = "system-backboardd-cfw-accelerometer"
+    public static let hinge = "system-backboardd-cfw-hinge"
+    public static let foldGuard = "system-springboard-cfw-fold_guard"
+    public static let foldDisplay = "system-springboard-cfw-fold_display"
     public static let attitude = "system-apps-cfw-attitude"
     public static let followUpGroups = "system-preferences-cfw-followup_groups"
     public static let signInSheets = "system-apps-cfw-signin_sheets"
     public static let arm64eX1DyldBootstrap = "system-dyld-boot-arm64e_x1_bootstrap"
     public static let arm64eX1CacheBootstrap = "dyld-boot-arm64e_x1_bootstrap"
+    public static let arm64eX1CacheRemaining = "dyld-cfw-arm64e_x1_cache"
     public static let arm64eX1LaunchdBootstrap = "system-launchd-boot-arm64e_x1_bootstrap"
     public static let arm64eX1FsckBootstrap = "system-fsck-boot-arm64e_x1_bootstrap"
     public static let arm64eX1MountBootstrap = "system-mount-boot-arm64e_x1_bootstrap"
+    public static let arm64eX1CIBarcode = "system-cibarcode-cfw-arm64e_x1"
+    public static let ciBarcodeBundlePath = "System/Library/CoreImage/CIBarcode.cifilter"
+    public static let ciBarcodeExecutablePath = ciBarcodeBundlePath + "/CIBarcode"
 
     public static let paravirtGPUIndexOffset = "system-paravirt_gpu-cfw-heap_index_offset"
     public static let paravirtGPUDriverPath =
@@ -47,6 +54,9 @@ public enum FirmwareGuestSystemPatchSet {
     public static let tvTPRO = "system-dyld-exp-tv_tpro"
     public static let tvSetupDisplayLookup = "system-setupbackground-exp-pineboard_lookup"
     public static let tvLegacySetup = "system-tv-exp-legacy_setup"
+    public static let tvSetupFocus = "system-setup-exp-deferred_focus"
+    public static let tvSetupFocusLibrary = "/usr/lib/libvphonetvsetupfocus.dylib"
+    public static let tvLocalActivation = "system-mobileactivationd-exp-tv_activation"
     /// Replaces the restored System volume with an Apple TV 4K userland
     /// staged from its OTA. Research only: no IPSW exists for that device.
     public static let tvOTAUserland = "system-tv-exp-ota_userland"
@@ -132,9 +142,23 @@ public enum FirmwareGuestSystemPatchSet {
             ),
             VPhonePatchDeclaration(
                 identifier: tvLegacySetup,
-                title: "TV setup virtual remote compatibility",
-                summary: "Selects the native TVSetup app retained in tvOS 27.2 by disabling TVSetupV2 and TVSetupV2HW. Its language screen accepts virtual keyboard and consumer remote input. Setup choices and completion remain under user control.",
+                title: "Legacy TV setup (research)",
+                summary: "Research fallback: selects the legacy TVSetup app in tvOS 27.2 by disabling TVSetupV2 and TVSetupV2HW. Off in every preset; disabling restores the original flags and the new Setup flow.",
                 target: .guestFile(path: "/" + CustomFirmwareTVSetup.relativePath),
+                applicability: VPhonePatchApplicability(iOSBase: .release(major: 27, minor: 2)),
+            ),
+            VPhonePatchDeclaration(
+                identifier: tvLocalActivation,
+                title: "TV local activation",
+                summary: "Uses mobileactivationd’s existing local activation path for the tvOS 27.2 research guest, allowing the native Setup assistant to proceed without an Apple activation record.",
+                target: .guestExecutable(path: "/usr/libexec/mobileactivationd"),
+                applicability: VPhonePatchApplicability(iOSBase: .release(major: 27, minor: 2)),
+            ),
+            VPhonePatchDeclaration(
+                identifier: tvSetupFocus,
+                title: "TV setup button focus",
+                summary: "Uses native TV button-focus policy in the new tvOS 27.2 Setup window, so Consumer Select works without indirect-touch activity, including after idle. Preserves explicit focus overrides, eligibility and all Setup readiness checks.",
+                target: .guestExecutable(path: "/Applications/Setup.app/Setup"),
                 applicability: VPhonePatchApplicability(iOSBase: .release(major: 27, minor: 2)),
             ),
             VPhonePatchDeclaration(
@@ -154,7 +178,7 @@ public enum FirmwareGuestSystemPatchSet {
             VPhonePatchDeclaration(
                 identifier: virtualBluetooth,
                 title: "Virtual Bluetooth",
-                summary: "Turns on the feature flag that lets bluetoothd connect over its virtual controller, which a paired watch and phone talk over.",
+                summary: "Turns on the feature flag that lets bluetoothd establish LE connections between guests over its Bonjour virtual controller.",
                 target: .guestFile(path: "/" + CustomFirmwareBluetoothVirtualController.relativePath),
                 applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 0)),
             ),
@@ -262,6 +286,13 @@ public enum FirmwareGuestSystemPatchSet {
                 bootEssential: true,
             ),
             VPhonePatchDeclaration(
+                identifier: arm64eX1CacheRemaining,
+                title: "ARM64E_X1 cache lowering",
+                summary: "Lowers X1 instructions in every other shared-cache image ahead of time, so apps and extensions do not queue on launchd's on-demand handler until FrontBoard's watchdog kills them.",
+                target: .dyldSharedCache,
+                applicability: ios27,
+            ),
+            VPhonePatchDeclaration(
                 identifier: arm64eX1LaunchdBootstrap,
                 title: "ARM64E_X1 launchd bootstrap",
                 summary: "Lowers PID 1 itself so its injected on-demand instruction handler can become active for the rest of userland.",
@@ -284,6 +315,17 @@ public enum FirmwareGuestSystemPatchSet {
                 target: .guestExecutable(path: "/sbin/mount"),
                 applicability: ios27,
                 bootEssential: true,
+            ),
+            VPhonePatchDeclaration(
+                identifier: arm64eX1CIBarcode,
+                title: "ARM64E_X1 barcode filters",
+                summary: """
+                Lowers the standalone CIBarcode plug-in before apps load its barcode filters. \
+                This image is outside the shared cache, so whole-cache lowering cannot prevent \
+                its remaining X1 instruction faults.
+                """,
+                target: .guestExecutable(path: "/" + ciBarcodeExecutablePath),
+                applicability: VPhonePatchApplicability(iOSBase: .release(major: 27, minor: 1)),
             ),
 
             VPhonePatchDeclaration(
@@ -399,7 +441,16 @@ public enum FirmwareGuestSystemPatchSet {
                 title: "HomePod setup completion",
                 summary: "Completes the donor's local AudioAccessory setup state as mobile, prepares SetupAssistant's native launch sentinel and lets SoundBoard initialize its post-setup services. Turning it off restores the prior completion flags at the next boot. Does not provision accounts, activation or a HomeKit home.",
                 target: .guestFile(path: homePodSetupPath),
-                applicability: VPhonePatchApplicability(iOSBase: .major(27)),
+                // 26.5 has the same AudioAccessory gate and SetupAssistant
+                // exports; the helper refuses if one is missing.
+                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 5)),
+            ),
+            VPhonePatchDeclaration(
+                identifier: homePodAirPlayVM,
+                title: "HomePod AirPlay on a VM",
+                summary: "Sets AirPlay's own virtual-machine override (useWiFiAndAWDLOnVirtualMachine in mobile's com.apple.airplay) through the HomePod helper, so AirPlay keeps discovery and its own endpoint and a Mac or iPhone can play to the guest. Turning it off restores the prior value at the next boot.",
+                target: .guestFile(path: homePodAirPlayVMPath),
+                applicability: VPhonePatchApplicability(iOSBase: .release(major: 26, minor: 5)),
             ),
             VPhonePatchDeclaration(
                 identifier: homePodSiriSpeech,
@@ -476,6 +527,55 @@ public enum FirmwareGuestSystemPatchSet {
             ),
 
             VPhonePatchDeclaration(
+                identifier: hinge,
+                title: "Virtual hinge angle sensor",
+                summary: """
+                Installs libvphonehinge.dylib, loaded by SystemHook into backboardd. Publishes the \
+                foldable's virtual hinge HID service (usage page 0xFF0C, usage 0x21) and reports \
+                the hinge angle chosen by display.posture, so CoreMotion's angle manager — and \
+                through it CoreDevice's hingeAngle stream — reads the fold state instead of \
+                finding no sensor. With the foldable product identity patch, which is what makes \
+                CoreMotion look for the service. Foldable guests only.
+                """,
+                target: .guestFile(path: "/usr/lib/libvphonehinge.dylib"),
+                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 18, minor: 0)),
+            ),
+
+            VPhonePatchDeclaration(
+                identifier: foldGuard,
+                title: "Foldable secure-indicator guard",
+                summary: """
+                Installs libvphonefoldguard.dylib, loaded by SystemHook into SpringBoard. With \
+                the foldable product identity, SpringBoard's first CA transaction reaches \
+                CASecureIndicatorLayer, which raises about indicator geometry a single-display \
+                guest cannot supply — the raise crash-loops SpringBoard into device-recovery \
+                (SIGABRT, measured twice on 27.1 24A94425). The guard catches that one exception \
+                and answers no layer copy, so the system app boots with the Duo identity and its \
+                fold layouts; the secure indicator is the casualty. Inert on any guest without \
+                the identity. Foldable guests only.
+                """,
+                target: .guestFile(path: "/usr/lib/libvphonefoldguard.dylib"),
+                applicability: VPhonePatchApplicability(iOSBase: .major(27)),
+            ),
+
+            VPhonePatchDeclaration(
+                identifier: foldDisplay,
+                title: "Foldable inner display",
+                summary: """
+                Installs libvphonefolddisplay.dylib, loaded by SystemHook into backboardd and \
+                SpringBoard. A real iPhone Duo drives two panels: the cover is Main and the \
+                inner panel a second built-in, always-connected landscape display. backboardd \
+                publishes the inner panel as a software render display with the device tree's \
+                surface types and routes the one digitizer to whichever panel is lit; SpringBoard \
+                classifies it as built-in, resolves the fold postures for both displays natively \
+                and composites the inner display onto the guest's single panel while open. \
+                Experimental. Acts only on iPhone19,4.
+                """,
+                target: .guestFile(path: "/usr/lib/libvphonefolddisplay.dylib"),
+                applicability: VPhonePatchApplicability(iOSBase: .major(27)),
+            ),
+
+            VPhonePatchDeclaration(
                 identifier: attitude,
                 title: "Device attitude simulation",
                 summary: "Installs libvphoneattitude.dylib, loaded by SystemHook into apps outside system UI services such as SpringBoard. Supplies a stationary Core Motion pose configured through vphoned, with polling and callback updates in the arbitrary vertical reference frame. Disabling simulation restores native motion; removing the library reverts the hook on app relaunch.",
@@ -547,6 +647,25 @@ public enum FirmwareGuestSystemPatchSet {
                 target: .guestExecutable(path: "/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin/VirtualAudio"),
             ),
             VPhonePatchDeclaration(
+                identifier: virtualAudioDeviceStateNullGate,
+                title: "VirtualAudio device-state null gate",
+                summary: """
+                Makes VirtualAudio_Device's two device-state updates wait for the
+                DeviceStateManager singleton instead of dereferencing it when it does
+                not exist. On a guest with no haptic hardware deferred initialization
+                never constructs the manager, and a route push that arrives while the
+                gates answer true reads the null singleton and crash-loops audiomxd.
+                Each update's gate-check call is redirected to TheInstance, so the
+                branch that already skips the update on a failed check now tests the
+                singleton itself: no manager, the update is skipped through the
+                function's own path; manager present, the update runs exactly as
+                designed. Applies only to the arm64e.x1 plugin (iOS 27.1's
+                iPhone19,4); earlier builds are left byte-identical.
+                """,
+                target: .guestExecutable(path: "/Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin/VirtualAudio"),
+                applicability: VPhonePatchApplicability(iOSBase: .major(27)),
+            ),
+            VPhonePatchDeclaration(
                 identifier: virtualAudioGraphConfigurations,
                 title: "VirtualAudio speaker graph chains",
                 summary: """
@@ -610,6 +729,45 @@ public enum FirmwareGuestSystemPatchSet {
                 Button and About no Model Name. Hardware the VM does not have is left out. Takes the \
                 iPhone's device tree from the VM's FirmwareOriginals, and recovers it there from the \
                 VM's IPSW in ~/.vphone/ipsws when it is missing.
+                """,
+                target: .prebootDeviceTree,
+            ),
+            VPhonePatchDeclaration(
+                identifier: prebootFoldableVMSubtype,
+                title: "Foldable VM sub-type",
+                summary: """
+                Reports Apple's own VM sub-type for a foldable board in the restored Preboot device \
+                tree (iPhone Duo's V68AP becomes V68VM2025). SpringBoard then treats the device as a \
+                VM and restores its fold pose from settings, instead of waiting for hinge hardware \
+                the VM does not have. Restore keeps the board's own sub-type.
+                """,
+                target: .prebootDeviceTree,
+            ),
+            VPhonePatchDeclaration(
+                identifier: prebootFoldableProductId,
+                title: "Foldable product identity",
+                summary: """
+                Replaces /product/product-id in a foldable guest's restored Preboot device tree \
+                with the board's own token, taken from the Duo's DeviceTree.v68ap. CoreMotion \
+                picks its motion capabilities from that token: without it the guest is a generic \
+                virtual device with none, so the angle, device-state and magic-pose managers are \
+                unavailable and locationd starts no device-state relay for the virtual hinge. The \
+                Duo branches the token opens expect the second panel the fold display patch \
+                publishes; with one display SpringBoard crash-loops. Introduced, off, as \
+                preboot-exp-devicetree_foldable_product_id.
+                """,
+                target: .prebootDeviceTree,
+            ),
+            VPhonePatchDeclaration(
+                identifier: prebootFoldableDisplays,
+                title: "Foldable panel nodes",
+                summary: """
+                Copies a foldable board's panel nodes (/product/display0 and display1 on the \
+                Duo's V68AP) into the guest's restored Preboot device tree. MobileGestalt counts \
+                them for the logical display count and reads their rotation, scale, corner radii \
+                and chrome identifiers into DisplayExtendedProperties, which QuartzCore gives each \
+                display; without them the guest reports one display and no properties, where \
+                Apple's Duo simulator reports two.
                 """,
                 target: .prebootDeviceTree,
             ),
@@ -686,6 +844,11 @@ public enum FirmwareGuestSystemPatchSet {
     /// the virtio aggregate it already built.
     public static let virtualAudioVolumeModePrecondition = "system-virtualaudio-cfw-volume_mode_precondition"
 
+    /// The two device-state updates made to wait for the DeviceStateManager
+    /// singleton instead of dereferencing it when no manager was ever
+    /// constructed — the null gate audiomxd crash-loops without.
+    public static let virtualAudioDeviceStateNullGate = "system-virtualaudio-cfw-device_state_null_gate"
+
     /// The speaker chains in graph_configurations.plist, moved onto the
     /// generic graph path so the DSP chain factory never needs the physical
     /// Speaker device a VM does not have.
@@ -706,6 +869,8 @@ public enum FirmwareGuestSystemPatchSet {
     public static let homePodDisplayPath = "/usr/share/vphone/HomePodDisplay.plist"
     public static let homePodSetupBypass = "system-homepod-exp-setup_bypass"
     public static let homePodSetupPath = "/usr/share/vphone/HomePodSetup.plist"
+    public static let homePodAirPlayVM = "system-homepod-exp-airplay_vm"
+    public static let homePodAirPlayVMPath = "/usr/share/vphone/HomePodAirPlay.plist"
     public static let homePodWelcome = "system-homepod-exp-welcome"
     public static let homePodWelcomePath = "/usr/share/vphone/HomePodWelcome.plist"
     public static let homePodSiriSpeech = "system-homepod-exp-siri_speech"
@@ -717,6 +882,13 @@ public enum FirmwareGuestSystemPatchSet {
     /// The iPhone product description in the restored Preboot device tree,
     /// taken from the iPhone's own tree: see `DeviceTreePatcher.presentPhoneProduct`.
     public static let prebootIPhoneProduct = "preboot-cfw-devicetree_iphone_product"
+
+    /// Apple's VM sub-type for a foldable board in the restored Preboot
+    /// device tree.
+    public static let prebootFoldableVMSubtype = "preboot-cfw-devicetree_foldable_vm_subtype"
+    public static let prebootFoldableProductId = "preboot-cfw-devicetree_foldable_product_id"
+    /// The foldable board's panel nodes under `/product`.
+    public static let prebootFoldableDisplays = "preboot-cfw-devicetree_foldable_displays"
 
     /// The haptics node removal in the restored Preboot device tree, for any
     /// VM patched before `fw patch` removed it from every guest's tree.

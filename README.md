@@ -65,6 +65,17 @@ Tested guest pairings on Linux:
   scrolling and drags work from the window (`WINDOW=1`) and over QMP (`tools/qmp.py`).
 - Home: a swipe up from the bottom edge, or a middle click. QEMU turns these into Cmd+H, iOS's Home
   shortcut (the guest does not start its own home gesture from this touchscreen).
+- The window's button bar: Home, Lock, Volume up/down, Screenshot (saved to `~/Pictures/vphone/`),
+  and Fold on an iPhone Duo. `run-vphone.sh` starts it with the window; `TOOLBAR=0` turns it off
+  ([docs/TOOLS.md](docs/TOOLS.md#the-vm-window)).
+- iPhone Duo (iPhone19,4, iOS 27.1): its cover and its unfolded inner display, through vphone-cli
+  2.14's fold patches. The Fold button opens and closes it, and the window turns landscape while it
+  is open.
+
+<p align="center">
+  <img src="docs/screenshots/window-duo-closed.jpg" height="300" alt="iPhone Duo closed, with the window's button bar">
+  <img src="docs/screenshots/window-duo-open.jpg" height="300" alt="iPhone Duo unfolded, the window turned landscape">
+</p>
 - vphoned, vphone-cli's guest daemon, over vsock (port 1339): health, `screen.unlock`, `apps.launch`,
   services, file upload, self-update (`tools/vphoned.sh`, `tools/vphoned-update.sh`).
 - Your own apps: an iOS app built on Linux with [xtool](https://github.com/xtool-org/xtool) installs
@@ -89,7 +100,7 @@ Tested guest pairings on Linux:
   (2026-10-19); later TCG work made indirect-branch lookups and TLB refills much cheaper.
   Scrolling Settings now runs at about 60-68 frames/s on average, with occasional 50-110 ms stalls
   (guest CPU work at emulated speed).
-- Creating the VM needs root for several steps, about 45 GB free disk, and about an hour plus the
+- Creating the VM needs root for several steps, about 60 GB free disk, and about an hour plus the
   downloads ([docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md)).
 - Only the NVIDIA host GPU has been tested. reims-vgpu documents what AMD GPUs need (`/dev/udmabuf`).
 - vphoned's `GET /v1/files/content` stops after 64 KiB on the default vhost-vsock datapath; use
@@ -103,7 +114,8 @@ Tested guest pairings on Linux:
 ## Quick start
 
 You need a Linux x86_64 PC with a Vulkan GPU (NVIDIA tested), 16 GB RAM or more, about 100 GB free
-disk, and sudo. No Mac. **Two steps**:
+disk (the tools and builds, about 11 GB of firmware, a VM of 20-25 GB, and room to make it; `create-vm.sh`
+checks), and sudo. No Mac. **Two steps**:
 
 ```sh
 git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
@@ -169,7 +181,7 @@ The submodules are [qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone),
 reims-vgpu's `Cargo.toml` takes metal2vulkan from `../metal2vulkan`, so the submodules must stay side by
 side as above. vphone-cli is not a submodule: on a Mac it
 runs from its own releases, and `linux-create/sync-sources.sh` builds its firmware tooling from a
-vphone-cli 2.12.1 checkout without changing its files.
+vphone-cli 2.14.2 checkout without changing its files.
 
 ## Credits
 

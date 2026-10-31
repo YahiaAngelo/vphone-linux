@@ -170,7 +170,7 @@ def main() -> int:
         desired = after.ljust(clear, b"\0")
 
         if bytes(data[start:start + clear]) == desired:
-            print(f"bank 0x{base:x}: already auto-boot=true"
+            print(f"bank 0x{base:x}: already auto-boot={args.auto_boot}"
                   + (f" with boot-args={args.boot_args!r}" if args.boot_args else " with no boot-args"))
             continue
 

@@ -16,7 +16,7 @@ declare -A SRC=(
   [MobileRestoreCore]=VPhoneExecutable/VPhoneCommand/VPhoneRestore/MobileRestoreCore
   [MobileRecoveryCore]=VPhoneExecutable/VPhoneCommand/VPhoneRestore/MobileRecoveryCore
 )
-IMPORTS='^(@preconcurrency import |@_implementationOnly import |import )(Darwin|MachO|Compression|CoreGraphics|CoreServices|UniformTypeIdentifiers|CryptoKit|zlib)( *//.*)?$'
+IMPORTS='^(@preconcurrency import |@_implementationOnly import |import )(Darwin|MachO|Compression|CoreGraphics|CoreServices|UniformTypeIdentifiers|CryptoKit|zlib|os)( *//.*)?$'
 for t in "${!SRC[@]}"; do
   rm -rf "Sources/$t"; mkdir -p "Sources/$t"
   src=$(realpath "$V/${SRC[$t]}")

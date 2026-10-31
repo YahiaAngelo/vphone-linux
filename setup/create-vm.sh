@@ -150,7 +150,19 @@ do_sanity() {
   for one in "$VC" "$QEMU_RUN" "$VSETUP_SRC/OpenAVB/OpenAVB.bin" "$VSETUP_SRC/OpenSEP/OpenSEP.bin"; do
     [ -e "$one" ] || { warn "missing: $one — run ./setup.sh first"; missing=1; }
   done
-  [ "$missing" = 0 ]
+  [ "$missing" = 0 ] || return 1
+  # The VM grows to 20-25 GB, the firmware takes ~11 GB in ~/.cache/vphone and the restore
+  # tree ~15 GB more while the VM is made: about 60 GB in all.
+  local dir free
+  for dir in "$VSETUP_DEVICES" "$HOME/.cache"; do
+    mkdir -p "$dir"
+    free=$(df -P -BG "$dir" | awk 'NR == 2 { sub(/G$/, "", $4); print $4 }')
+    if [ "${free:-0}" -lt 25 ]; then
+      die "only ${free} GB free under $dir: making a VM needs about 60 GB (free some space, or pass --workdir on a larger disk)"
+    elif [ "$free" -lt 60 ]; then
+      warn "only ${free} GB free under $dir: making a VM needs about 60 GB in all"
+    fi
+  done
 }
 
 do_bundle() {
@@ -276,6 +288,7 @@ usb_helpers() {
 
 do_restore() {
   usb_helpers
+  dry "$T/dfu-stop.sh" "$VM"     # a QEMU left by an earlier, failed attempt
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-dfu"
   dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-dfu"; return 1; }
   dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
@@ -296,6 +309,19 @@ if [ -f /mnt7/AA.gl ]; then
 fi
 true'
 
+# What the SSH ramdisk wait sees: the guest's USB device on the host, usbmuxd's view, and ssh's
+# last error.
+sshrd_status() {
+  local apple mux
+  apple=$(lsusb 2>/dev/null | grep -i ' 05ac:' | sed 's/^/      /' || true)
+  mux=$(timeout 10 python3 "$T/usbmux-connect.py" list 2>&1 | sed 's/^/      /' || true)
+  warn "SSH ramdisk not answering yet. Apple USB devices on the host:"
+  printf '%s\n' "${apple:-      (none: the USB/IP attach loop has not attached the guest; see /tmp/vphone-usbip-autoattach.log)}" >&2
+  printf '   usbmuxd devices (05ac:12a8 = the booted ramdisk):\n%s\n' "${mux:-      (none: see /tmp/usbmuxd-32k.log)}" >&2
+  printf '   ssh: %s\n' "$(grep -v -E '^Warning: Permanently added' "$1" | tail -2 | tr '\n' ' ')" >&2
+  printf '   guest serial: %s\n' "$(tail -1 "$VM/.runs-sshrd/serial.log" 2>/dev/null | cut -c1-160)" >&2
+}
+
 do_cfw() {
   usb_helpers
   # The SSH tools the ramdisk gets (dropbear, bash, sftp-server, ...): fetched once, pinned and
@@ -306,6 +332,7 @@ do_cfw() {
   dry bash "$T/ssh-ramdisk-rebuild-signed.sh" "$VSETUP_DEVICES" "$NAME"
   dry "$T/restore-tree-mode.sh" "$VSETUP_DEVICES" "$NAME" ssh
   dry python3 "$T/nvram-autoboot.py" "$VM/nvram.bin" --auto-boot false
+  dry "$T/dfu-stop.sh" "$VM"     # a QEMU left by an earlier, failed attempt
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-sshrd"
   dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-sshrd"; return 1; }
   # --boot-ramdisk ends by waiting for restore mode, which the SSH ramdisk never enters: it runs
@@ -318,9 +345,12 @@ do_cfw() {
       "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" --boot-ramdisk -v \
       > "$VM/.runs-sshrd/boot-ramdisk.log" 2>&1 &
     log "  waiting for the SSH ramdisk (log: $VM/.runs-sshrd/boot-ramdisk.log)"
-    local tries=0
-    until timeout 60 "$T/ssh-ramdisk.sh" id >/dev/null 2>&1; do
-      tries=$((tries + 1)); [ "$tries" -lt 60 ] || die "the SSH ramdisk did not answer in 30 min"
+    local tries=0 sshlog=$VM/.runs-sshrd/ssh-wait.log
+    until timeout 60 "$T/ssh-ramdisk.sh" id > "$sshlog" 2>&1; do
+      tries=$((tries + 1))
+      # Every 5 min, say where it is: the ramdisk normally answers within ~10 min.
+      if [ $((tries % 10)) = 0 ] || [ "$tries" -ge 60 ]; then sshrd_status "$sshlog"; fi
+      [ "$tries" -lt 60 ] || die "the SSH ramdisk did not answer in 30 min (see above and docs/TROUBLESHOOTING.md)"
       sleep 30
     done
   fi
@@ -380,10 +410,27 @@ boot_vm() {
     log "  QEMU output → $VM/serial.log; waiting for vphoned"
   fi
   until vphoned_up; do
-    [ -d "/proc/$QEMU_PID" ] || die "QEMU exited; see $VM/serial.log"
+    qemu_alive || { echo >&2; qemu_exit_report; die "QEMU exited; see $VM/serial.log"; }
     sleep 10; printf '.' >&2
   done
   echo >&2
+}
+# A QEMU whose window closed can linger as <defunct> (state Z) while a GPU thread is stuck in
+# the kernel: count that as exited.
+qemu_alive() {
+  local state
+  state=$(awk '/^State:/ { print $2 }' "/proc/$QEMU_PID/status" 2>/dev/null) || return 1
+  [ -n "$state" ] && [ "$state" != Z ] && [ "$state" != X ]
+}
+qemu_exit_report() {
+  warn "QEMU (pid $QEMU_PID) is gone. The last lines it printed:"
+  grep -v -E '^\s*$' "$VM/serial.log" 2>/dev/null | tail -5 | sed 's/^/      /' >&2
+  if journalctl -k --since '-6h' 2>/dev/null | grep -q -i -E "out of memory.*qemu|oom-kill.*qemu"; then
+    warn "the kernel's out-of-memory killer stopped QEMU: the VM needs 8 GB of RAM plus room for the host"
+    warn "(close other programs, then re-run)"
+  else
+    warn "if nothing above says why, check: journalctl -k | grep -i -E 'oom|qemu|segfault'; coredumpctl list"
+  fi
 }
 # Waits for the VM's QEMU to exit (after vphoned shut the guest down); it need not be this
 # shell's child, so its /proc entry is watched.

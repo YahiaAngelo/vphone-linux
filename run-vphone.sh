@@ -9,7 +9,8 @@
 # "ecid" with the machine's ECID in hex (from its machineIdentifier).
 #
 # Env: QEMU, SMP (AP cores, default 8), MEM (default 8G), GFX=1 to attach the
-#      reims-vgpu paravirtual GPU, WINDOW=1 for its own window, LOG (-D file),
+#      reims-vgpu paravirtual GPU, WINDOW=1 for its own window (with a button bar;
+#      TOOLBAR=0 for none), LOG (-D file),
 #      DFLAGS (-d flags), TRACE (-trace pattern), GDB=<port> to wait for gdb,
 #      CID (vsock context ID, default 3; unique per running VM; 0 = no vsock),
 #      VSOCK (uds | vhost: vsock datapath, see below), VSOCK_DIR (uds sockets).
@@ -76,6 +77,14 @@ if [ "${GFX:-0}" = 1 ]; then
   machine+=",gfx-device=apple-gfx-mmio,memory-backend=ram0,gfx-modes=${GFX_MODES:-$GFX_RES@60}"
   # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
   # per-task processes map guest RAM in whole guest pages (memfd has no align)
+  # The guest's RAM lives in /dev/shm (a tmpfs, by default half the host's RAM). If it fills
+  # up, the guest's next new page kills QEMU with SIGBUS and no message: check first.
+  need=$(numfmt --from=iec "$MEM") shm=$(( $(stat -f -c '%a * %S' /dev/shm) ))
+  if [ "$need" -gt "$shm" ]; then
+    echo "run-vphone.sh: /dev/shm has $(numfmt --to=iec "$shm") free, the guest's RAM needs $MEM." >&2
+    echo "  Free it up (other VMs, browsers), or enlarge it: sudo mount -o remount,size=12G /dev/shm" >&2
+    exit 1
+  fi
   args+=(-object "memory-backend-file,id=ram0,size=$MEM,mem-path=/dev/shm,share=on,align=2M"
          -global apple-gfx-mmio.resolution=$GFX_RES
          -global apple-gfx-mmio.process-isolation=${GFX_ISOLATION:-on})
@@ -156,6 +165,15 @@ if [ "$CID" != 0 ]; then
     rm -f "$VSOCK_DIR/$CID.sock"  # tools prefer the socket when it exists
     args+=(-device "vhost-vsock-pci,guest-cid=$CID")
   fi
+fi
+
+# The window's button bar (Home, Lock, volume, screenshot, and Fold on an iPhone Duo) and, on a
+# foldable guest, its rotation: tools/window/vphone-window.py talks to the window over its control
+# socket and to vphoned over vsock, and ends with QEMU. TOOLBAR=0 leaves the window bare.
+if [ "${GFX:-0}" = 1 ] && [ "${WINDOW:-0}" = 1 ] && [ "${TOOLBAR:-1}" = 1 ] && [ "$CID" != 0 ]; then
+  export REIMS_VGPU_WINDOW_CONTROL=${XDG_RUNTIME_DIR:-/tmp}/vphone-window-$CID.sock
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tools/window/vphone-window.py" \
+    "$REIMS_VGPU_WINDOW_CONTROL" --cid "$CID" &
 fi
 
 [ -n "${LOG:-}" ] && args+=(-D "$LOG")

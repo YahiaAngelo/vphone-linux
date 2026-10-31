@@ -131,10 +131,12 @@ extension VPhoneCustomFirmwareInstaller {
                     "This VM has no CFW install to update. Run `vphone-cli cfw install` first.",
                 )
             }
+            // xART too: the SSH ramdisk step gave the gigalocker the UUID name its own seputil
+            // asks for, and the installed system's seputil looks for AA.gl again.
             liveGuest = try applyGuestPatches(
                 guestDevice: device,
                 system: systemRoot,
-                xart: nil,
+                xart: xartRoot,
                 restore: nil,
                 work: work,
                 owner: nil,
@@ -163,7 +165,8 @@ extension VPhoneCustomFirmwareInstaller {
             plan: plan,
             priorGuest: priorGuest,
             guestDevice: device,
-            includeIdentity: mode == .full,
+            includeIdentity: mode == .full
+                || plan?.isEnabled(FirmwareGuestIdentityPatchSet.prebootDeviceTreeIdentity) == true,
             buildVersion: buildVersion,
             boardDeviceTree: boardDeviceTree,
         ))
@@ -172,8 +175,26 @@ extension VPhoneCustomFirmwareInstaller {
         if !device.presentsBoard {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootBoardAudio)
         }
-        if device.isPad {
+        // As the macOS path's list (VPhoneCustomFirmwareInstaller.swift).
+        if device.family != .iPhone {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootIPhoneProduct)
+        }
+        if device.family != .homePod {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.homePodAudioProduct)
+        }
+        if !Self.isFoldable(device) {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableVMSubtype)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableProductId)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootFoldableDisplays)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.hinge)
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.foldGuard)
+        }
+        if Self.isFoldable(device) {
+            // The display-node strip leaves a foldable's panels.
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootDisplayNodes)
+        }
+        if !device.usesTVOS {
+            notApplicableGuest.insert(FirmwareGuestSystemPatchSet.tvTPRO)
         }
         if buildVersion?.isEmpty ?? true {
             notApplicableGuest.insert("system-systemversion-cfw-build_version")
