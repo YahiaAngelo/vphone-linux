@@ -65,6 +65,17 @@ Tested guest pairings on Linux:
   scrolling and drags work from the window (`WINDOW=1`) and over QMP (`tools/qmp.py`).
 - Home: a swipe up from the bottom edge, or a middle click. QEMU turns these into Cmd+H, iOS's Home
   shortcut (the guest does not start its own home gesture from this touchscreen).
+- The window's button bar: Home, Lock, Volume up/down, Screenshot (saved to `~/Pictures/vphone/`),
+  and Fold on an iPhone Duo. `run-vphone.sh` starts it with the window; `TOOLBAR=0` turns it off
+  ([docs/TOOLS.md](docs/TOOLS.md#the-vm-window)).
+- iPhone Duo (iPhone19,4, iOS 27.1): its cover and its unfolded inner display, through vphone-cli
+  2.14's fold patches. The Fold button opens and closes it, and the window turns landscape while it
+  is open.
+
+<p align="center">
+  <img src="docs/screenshots/window-duo-closed.jpg" height="300" alt="iPhone Duo closed, with the window's button bar">
+  <img src="docs/screenshots/window-duo-open.jpg" height="300" alt="iPhone Duo unfolded, the window turned landscape">
+</p>
 - vphoned, vphone-cli's guest daemon, over vsock (port 1339): health, `screen.unlock`, `apps.launch`,
   services, file upload, self-update (`tools/vphoned.sh`, `tools/vphoned-update.sh`).
 - Your own apps: an iOS app built on Linux with [xtool](https://github.com/xtool-org/xtool) installs

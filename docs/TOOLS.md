@@ -54,6 +54,25 @@ Common arguments:
 | `display-scale.py` | `tools/display-scale.py NVRAM [SCALE]` | Shows or sets iOS's screen scale by patching LLB in `nvram.bin` (`0` restores). Use it with a matching `gfx-res`. See [ADVANCED.md](ADVANCED.md#display-scale). Run it on a stopped VM, and keep a backup. |
 | `guest-1x-logo.py` | `tools/guest-1x-logo.py CID` | At 1x, gives the guest 1x copies of its boot Apple logo (halved from its own @2x images in ProgressUI.framework), which iOS otherwise lacks, leaving the boot screen black. Remounts `/` writable through a one-shot launchd job first. Takes effect from the next boot. |
 
+## The VM window
+
+With `WINDOW=1` (and `GFX=1`), reims-vgpu's window gets a button bar on its right: Home, Lock,
+Volume up, Volume down, Screenshot, and Fold on a foldable guest (iPhone Duo). `run-vphone.sh`
+starts `tools/window/vphone-window.py` next to QEMU, which does the work; `TOOLBAR=0` leaves the
+window bare.
+
+| Tool | Usage | What it does |
+|---|---|---|
+| `window/vphone-window.py` | started by `run-vphone.sh`; by hand: `tools/window/vphone-window.py SOCKET [--cid CID] [--px 48]` | Talks to the window over its control socket (`REIMS_VGPU_WINDOW_CONTROL`, `$XDG_RUNTIME_DIR/vphone-window-$CID.sock`) and to vphoned over vsock. Sends the bar; turns clicks into `input.button` (home, lock, volume-up, volume-down), `screen.screenshot` (saved to `~/Pictures/vphone/`, with a desktop notification) and `display.posture` (the fold). On a foldable guest it follows the hinge (`display.orientation`'s `fold_angle`) and turns the window a quarter clockwise while the Duo is open, where iOS draws the inner display sideways on the one panel. It ends with QEMU. |
+| `window/make-icons.py` | `tools/window/make-icons.py [PX]` | Draws the bar's icons into `tools/window/toolbar-PX.rgba` (needs Pillow; the 48 and 96 px atlases are committed). |
+
+The control socket's messages, one per line: `toolbar ATLAS PX id,id,...` (an RGBA8 atlas, `2*PX` wide
+and `PX` high per button: normal, then lit), `toolbar off`, `rotate 0|90|180|270` (clockwise, the
+pointer mapping follows); the window answers `button ID` on a click.
+
+Closing the Duo goes open → book → closed: straight from open flat, SpringBoard on this guest takes
+the closed hinge but stays on the inner display.
+
 ## Latency and frame-rate benchmarks
 
 | Tool | Usage | What it does |

@@ -9,7 +9,8 @@
 # "ecid" with the machine's ECID in hex (from its machineIdentifier).
 #
 # Env: QEMU, SMP (AP cores, default 8), MEM (default 8G), GFX=1 to attach the
-#      reims-vgpu paravirtual GPU, WINDOW=1 for its own window, LOG (-D file),
+#      reims-vgpu paravirtual GPU, WINDOW=1 for its own window (with a button bar;
+#      TOOLBAR=0 for none), LOG (-D file),
 #      DFLAGS (-d flags), TRACE (-trace pattern), GDB=<port> to wait for gdb,
 #      CID (vsock context ID, default 3; unique per running VM; 0 = no vsock),
 #      VSOCK (uds | vhost: vsock datapath, see below), VSOCK_DIR (uds sockets).
@@ -156,6 +157,15 @@ if [ "$CID" != 0 ]; then
     rm -f "$VSOCK_DIR/$CID.sock"  # tools prefer the socket when it exists
     args+=(-device "vhost-vsock-pci,guest-cid=$CID")
   fi
+fi
+
+# The window's button bar (Home, Lock, volume, screenshot, and Fold on an iPhone Duo) and, on a
+# foldable guest, its rotation: tools/window/vphone-window.py talks to the window over its control
+# socket and to vphoned over vsock, and ends with QEMU. TOOLBAR=0 leaves the window bare.
+if [ "${GFX:-0}" = 1 ] && [ "${WINDOW:-0}" = 1 ] && [ "${TOOLBAR:-1}" = 1 ] && [ "$CID" != 0 ]; then
+  export REIMS_VGPU_WINDOW_CONTROL=${XDG_RUNTIME_DIR:-/tmp}/vphone-window-$CID.sock
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tools/window/vphone-window.py" \
+    "$REIMS_VGPU_WINDOW_CONTROL" --cid "$CID" &
 fi
 
 [ -n "${LOG:-}" ] && args+=(-D "$LOG")
