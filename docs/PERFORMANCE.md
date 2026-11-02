@@ -54,8 +54,15 @@ Most changes have a switch, so each can be turned off for an A/B comparison.
 | **Larger minimum TLB size**: `CPU_TLB_DYN_MIN_BITS` raised from 6 to 10 (compile time). The softmmu TLBs no longer shrink to 64 entries under iOS's constant flushes. 12 made boot 13% slower | | QEMU's share of vCPU time 44.6% → 43.0% |
 | **2 GiB code cache** (x86-64's maximum). iOS's boot alone generates about 5 GB of translated code. With 1 GiB the cache filled every ~3.5 minutes of use (14 full flushes in 49 minutes), and each flush retranslates everything the guest runs next | `TB_SIZE` (launcher, MiB, default 2048) | |
 | **Neon float32 on the host's SIMD**: `FADD`/`FSUB`/`FMUL`/`FMLA`/`FMLS` (vector and by element) compute all lanes with SSE/FMA when the result is exactly softfloat's (inexact already raised, round to nearest, inputs zero or normal, results finite and not tiny); any other vector takes the per-lane path. Checked against softfloat by `tests/fp/vphone-f32-fast.c` in the QEMU fork | `VPHONE_FAST_F32` (default on, `0` off) | iOS 27 (iPhone Duo), app switching: floating point 11.1% → 5.7% of QEMU's time |
+| **Native A64 floating point and Neon** (ported from Inferno `2eed395`): FP and Neon float instructions are emitted as host SSE/AVX/FMA instructions in the generated code, with the host's MXCSR following FPCR (rounding, flags folded into FPSR). Each op falls back to the helper where x86 and Arm can differ (NaN results, minimum-normal results, unordered min/max, out-of-range conversions), and the whole path is off while FPCR.FZ/AH/FIZ/NEP are set. Checked against the helper path by `tests/fp/vphone-native-fp` in the QEMU fork (644 forms × 22 FPCR settings, results and FPSR) | `VPHONE_NATIVE_FP` (default on, `0` off) | iOS 27 app switching: FP helpers 7.6% → 0.6% of QEMU's time; a mixed FP/Neon guest loop 5.7× faster |
 
 Tried, and left off by default:
+
+- **WFE that waits** (Inferno `a5620ce`, ported on the fork's `vphone-wfe` branch): WFE halts the vCPU until
+  SEV, an interrupt, the event stream or a store to the monitored address. On this 28-thread host with 8
+  vCPUs it saved nothing: idle QEMU CPU 731 s vs 684 s per 120 s with it off, 60% more context switches.
+  The guest's busy vCPUs are background work, not lock spinning. It may help on a host with fewer cores
+  than vCPUs.
 
 - **`QEMU_TLB_UNSYNCED`** (relaxed broadcast TLB flushes). Six app-switch sweeps per mode gave the same
   latencies within noise. Settings scrolling: 31.4 vs 30.5 frames/s. The synced flush is not the
@@ -169,6 +176,7 @@ the launcher overrides some of them (above).
 | `QEMU_TLB_UNSYNCED` | 0 | Broadcast TLB flush mode: 0 synced (upstream), 1 fully async, 2 barrier (flush, then wait up to 1 ms for the others). Relaxed modes are experimental | `accel/tcg/cputlb.c` |
 | `VPHONE_XPAGE_LINKS` | off | Checked cross-page links | `target/arm/tcg/translate-a64.c` |
 | `VPHONE_RET_PREFETCH` | off | Return-address prefetch at calls: `2` inline, `1` through a helper, `0` off (the launcher sets 2) | `target/arm/tcg/translate-a64.c` |
+| `VPHONE_NATIVE_FP` | on | A64 FP/Neon as host SSE/AVX instructions; `0` = helpers (and softfloat's hardfloat) as before | `target/arm/tcg/host-fpcr.h`, `translate-a64.c` |
 | `VPHONE_FAST_F32` | on | Neon float32 add/sub/mul/fused multiply-add on the host's SIMD; `0` = softfloat lane by lane | `target/arm/tcg/vec-f32-fast.h` |
 | `VPHONE_INLINE_LOOKUP` | **2** | Jump cache lookup at `BR`/`BLR`/`RET`: `0` off (generic lookup), `1` inline check in generated code, `2` the same check in `helper_vphone_lookup_fast` with the TB's flags as constants (smaller code) | `target/arm/tcg/translate-a64.c` |
 | `VPHONE_LOOKUP_STATS` | off | Diagnostic: counts why A64 code ends in a TB lookup | `target/arm/tcg/translate-a64.c` |
