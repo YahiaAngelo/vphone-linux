@@ -61,8 +61,12 @@ Tried, and left off by default:
 - **WFE that waits** (Inferno `a5620ce`, ported on the fork's `vphone-wfe` branch): WFE halts the vCPU until
   SEV, an interrupt, the event stream or a store to the monitored address. On this 28-thread host with 8
   vCPUs it saved nothing: idle QEMU CPU 731 s vs 684 s per 120 s with it off, 60% more context switches.
-  The guest's busy vCPUs are background work, not lock spinning. It may help on a host with fewer cores
-  than vCPUs.
+  The guest's busy vCPUs are background work, not lock spinning. Its statistics (`VPHONE_WFE_STATS=1`,
+  fork branch `vphone-wfe2`) say why: an iOS 27 guest runs ~14,000 WFEs a second, 40% return at once,
+  and the rest wait about 11 us on average. XNU's timer event stream fires every few microseconds,
+  and even without it (`VPHONE_WFE_EVSTREAM=0`) the store that releases the lock comes within
+  microseconds. A vCPU thread's sleep and wakeup cost about as much as that spin. It may help on a
+  host with fewer cores than vCPUs.
 
 - **`QEMU_TLB_UNSYNCED`** (relaxed broadcast TLB flushes). Six app-switch sweeps per mode gave the same
   latencies within noise. Settings scrolling: 31.4 vs 30.5 frames/s. The synced flush is not the
