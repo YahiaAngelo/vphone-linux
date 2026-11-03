@@ -4,6 +4,7 @@
 #   ./create-vm.sh                                 # interactive menus
 #   ./create-vm.sh --device "iPhone17,3" --ios 26.6.2
 #   ./create-vm.sh --list                          # devices + tested pairings
+#   ./create-vm.sh --trim ...                      # also turn off ~137 background daemons (see below)
 #   ./create-vm.sh --dry-run --device ... --ios ... # print the pipeline, run nothing
 #
 # The pipeline is vphone-cli's Linux firmware flow (docs/SETUP.md §5) with one
@@ -14,7 +15,7 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 DEVICE=${DEVICE:-} IOS=${IOS:-} CLOUDOS_PICK=${CLOUDOS_PICK:-}
-SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3}
+SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3} TRIM=${TRIM:-0}
 while [ $# -gt 0 ]; do
   case $1 in
     --device)  DEVICE=$2; shift ;;
@@ -24,6 +25,7 @@ while [ $# -gt 0 ]; do
     --scale)   SCALE=$2; shift ;;   # display scale: 1 (default; 2 on iOS 27) | 2 | 3
     --cid)     CID=$2; shift ;;     # the VM's vsock CID (default 3; another VM may hold it)
     --dry-run) DRY=1 ;;
+    --trim)    TRIM=1 ;;            # vphoned's trimmed service profile (tools/service-profile.py)
     --list)    LIST=1 ;;
     -y)        export VSETUP_ASSUME_YES=1 ;;
     *) die "unknown option: $1" ;;
@@ -453,6 +455,7 @@ do_first_boot() {
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.skip","params":{"force":true},"id":1}'
     dry python3 "$T/auto-lock-never.py" "$VM" "$CID"
     [ "$SCALE" = 3 ] || dry python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
+    [ "$TRIM" = 0 ] || dry python3 "$T/service-profile.py" "$CID" trimmed
     return 0
   fi
   log "  the first boot migrates iOS's data behind an Apple logo and progress bar (20+ min)"
@@ -465,16 +468,29 @@ do_first_boot() {
   vrpc '{"method":"setup.skip","params":{"force":true},"id":1}'; echo
   unlock_vm
   python3 "$T/auto-lock-never.py" "$VM" "$CID"
+  local restart=0
   if [ "$SCALE" != 3 ]; then
     # iOS 27 also takes the scale from the guest's device tree: set it, then restart the guest
     # (vphoned shuts it down; QEMU exits by itself) so the new scale applies.
     python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
-    log "  restarting the guest for the ${SCALE}x screen"
+    restart=1
+  fi
+  if [ "$TRIM" = 1 ]; then
+    # Takes effect at the next boot, the same restart.
+    python3 "$T/service-profile.py" "$CID" trimmed ||
+      warn "the trimmed profile was not fully applied (see above); the VM works without it"
+    restart=1
+  fi
+  if [ "$restart" = 1 ]; then
+    log "  restarting the guest so the changes apply"
     vrpc '{"method":"system.shutdown","params":{"force":true},"id":1}'; echo
     wait_vm_exit
     boot_vm
     unlock_vm
     if [ "$SCALE" = 1 ]; then python3 "$T/guest-1x-logo.py" "$CID"; fi
+  fi
+  if [ "$TRIM" = 1 ]; then
+    log "  trimmed: this first boot is busy for about 10 minutes while widgets settle"
   fi
 }
 step booted do_first_boot

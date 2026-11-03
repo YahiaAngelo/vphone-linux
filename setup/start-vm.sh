@@ -5,6 +5,8 @@
 #   ./start-vm.sh NAME            # one of ~/vphone-setup-work/devices/NAME (or a VM folder path)
 #   ./start-vm.sh --list          # the VMs and whether each is running
 #   ./start-vm.sh --stop [NAME]   # shut the guest down (iOS's own shutdown, as on a phone)
+#   ./start-vm.sh --trim [NAME]   # turn off ~137 background daemons, then restart the guest
+#   ./start-vm.sh --untrim [NAME] # turn them on again, then restart the guest
 #
 # The VM runs in the background, its log in VM/serial.log; closing its window powers it off.
 # Options: --cid N (the vsock CID; default: the one create-vm.sh recorded, else 3),
@@ -15,11 +17,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 T=$VSETUP_SRC/tools
 QEMU_RUN=$VSETUP_SRC/run-vphone.sh
-NAME='' CID_OPT='' WINDOW_OPT=1 UNLOCK=1 MODE=start
+NAME='' CID_OPT='' WINDOW_OPT=1 UNLOCK=1 MODE=start PROFILE=''
+ARGS=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     --list)      MODE=list ;;
     --stop)      MODE=stop ;;
+    --trim)      MODE=profile PROFILE=trimmed ;;
+    --untrim)    MODE=profile PROFILE=none ;;
     --cid)       CID_OPT=$2; shift ;;
     --no-window) WINDOW_OPT=0 ;;
     --no-unlock) UNLOCK=0 ;;
@@ -89,6 +94,34 @@ if [ "$MODE" = stop ]; then
     die "vphoned did not answer on CID $CID: close the VM's window to power it off"
   for _ in $(seq 1 60); do [ -d "/proc/$p" ] || { log "stopped"; exit 0; }; sleep 2; done
   die "QEMU $p is still running after 2 minutes: close its window to power it off"
+fi
+
+# The service profile (tools/service-profile.py): applied while the guest runs, effective at its
+# next boot, so the guest is shut down and this script starts it again.
+if [ "$MODE" = profile ]; then
+  if ! p=$(qemu_of "$VM"); then
+    log "starting $(basename "$VM") to change its service profile"
+    "$0" --no-unlock ${CID_OPT:+--cid "$CID_OPT"} "$VM" || die "the VM did not start"
+    p=$(qemu_of "$VM") || die "the VM did not start"
+  fi
+  for i in $(seq 1 90); do
+    CID=$CID VPHONED_TIMEOUT=10 timeout 15 "$T/vphoned.sh" GET /v1/health 2>/dev/null | grep -q '"status":"ok"' && break
+    [ "$i" = 90 ] && die "iOS did not answer in 15 minutes; see $VM/serial.log"
+    sleep 10
+  done
+  python3 "$T/service-profile.py" "$CID" "$PROFILE" || warn "the profile was not fully applied (see above)"
+  log "restarting the guest so the change applies"
+  vphoned "$CID" '{"method":"system.shutdown","params":{"force":true},"id":1}' >/dev/null ||
+    die "vphoned did not answer: close the VM's window, then ./setup/start-vm.sh $(basename "$VM")"
+  while [ -d "/proc/$p" ]; do sleep 2; done
+  [ "$PROFILE" = trimmed ] && log "the first boot after trimming is busy for about 10 minutes while widgets settle"
+  # Start it again as asked, without the profile option, naming the VM (it may have come from
+  # the menu).
+  args=()
+  for a in "${ARGS[@]}"; do
+    case $a in --trim|--untrim) ;; "$NAME") [ -n "$NAME" ] || args+=("$a") ;; *) args+=("$a") ;; esac
+  done
+  exec "$0" "${args[@]}" "$VM"
 fi
 
 # Start.
