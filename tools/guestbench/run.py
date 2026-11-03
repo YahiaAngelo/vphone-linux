@@ -3,7 +3,9 @@
 
 Uploads tools/guestbench/guestbench to /var/root/guestbench through vphoned, waits S seconds
 (default 0) for the system to settle, runs it once uncounted, then N times (default 3) as
-launchd jobs and prints each result line and the median of each phase. Build guestbench with build.sh first.
+launchd jobs and prints each result line and the median of each phase. Each run line ends with
+busy=, the guest CPUs the other processes used meanwhile: a run beside a busy process is slower
+(broadcast TLB flushes stop every vCPU). Build guestbench with build.sh first.
 """
 import argparse
 import base64
@@ -34,21 +36,30 @@ def response(s):
         if not chunk:
             break
         body += chunk
+    if n is not None and len(body) < n:
+        raise ValueError("reply cut short")
     return body if n is None else body[:n]
 
 
 def rpc(cid, method, timeout=600, **params):
+    """One RPC; a reply cut short (vsock now and then closes a large one early) is asked again."""
     body = json.dumps({"method": method, "params": params, "id": 1}).encode()
-    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    s.connect((cid, PORT))
-    s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
-              b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-    r = json.loads(response(s))
-    s.close()
-    if "error" in r:
-        sys.exit(f"{method}: {r['error']['message']}")
-    return r["result"]
+    for attempt in range(5):
+        s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((cid, PORT))
+        s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                  b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        try:
+            r = json.loads(response(s))
+        except ValueError:
+            continue
+        finally:
+            s.close()
+        if "error" in r:
+            sys.exit(f"{method}: {r['error']['message']}")
+        return r["result"]
+    sys.exit(f"{method}: no whole reply in 5 tries")
 
 
 ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -63,6 +74,13 @@ with open(os.path.join(HERE, "guestbench"), "rb") as f:
         encoding="base64")
 rpc(a.cid, "files.chmod", path=DEST, mode="755")
 time.sleep(a.settle)
+
+def cpu_by_pid():
+    """Each guest process's CPU seconds so far, guestbench's left out."""
+    procs = rpc(a.cid, "processes.list")["processes"]
+    return {p["pid"]: p.get("cpu_seconds", 0.0) for p in procs
+            if "guestbench" not in p.get("name", "")}
+
 
 def run_once(i):
     """One run as a one-shot launchd job (vphoned's process.spawn runs only launchctl, log and
@@ -83,6 +101,8 @@ def run_once(i):
 """
     rpc(a.cid, "files.write", path=job, content=plist)
     out = ""
+    global busy
+    before, t0 = cpu_by_pid(), time.time()
     # The first job after a fresh boot sometimes starts but never writes: when a run has no
     # output after 2 minutes (it takes ~6 s), it is unloaded and started again.
     for attempt in range(3):
@@ -94,19 +114,28 @@ def run_once(i):
                 time.sleep(3)
                 out = rpc(a.cid, "files.read", path=outp).get("content", "")
                 if "total=" in out:
+                    # the other processes' load meanwhile, in guest CPUs (a process that
+                    # started meanwhile counts from zero, one that ended is not seen)
+                    after, t1 = cpu_by_pid(), time.time()
+                    used = sum(max(0.0, c - before.get(pid, 0.0)) for pid, c in after.items())
+                    busy = used / max(t1 - t0, 1e-9)
                     return out.strip().splitlines()[-1]
         finally:
             rpc(a.cid, "services.unload", paths=[job], force=True)
         print(f"run {i + 1}: no output after 2 minutes ({out[:200]!r}), retrying", file=sys.stderr)
     return out.strip().splitlines()[-1] if out.strip() else ""
 
+busy = None
 phases = {}
 if a.warmup:
     run_once(-1)   # not counted: the first run after boot pays for paging the binary in
 for i in range(a.runs):
+    busy = None
     out = run_once(i)
     if not out.startswith("guestbench"):
         sys.exit(f"run {i + 1}: unexpected output: {out[:600]!r}")
+    if busy is not None:
+        out += f" busy={busy:.2f}"
     print(out, flush=True)
     for kv in out.split()[1:]:
         k, _, v = kv.partition("=")
