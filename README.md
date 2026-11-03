@@ -129,7 +129,15 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ./setup/start-vm.sh                 # starts it in its window and unlocks it (a menu if you have several)
 ./setup/start-vm.sh --stop          # shuts iOS down (closing the window powers it off too)
 ./setup/start-vm.sh --list          # your VMs, and which are running
+./setup/start-vm.sh --trim          # turn off ~137 background daemons (--untrim turns them on)
 ```
+
+`--trim` (also on `create-vm.sh`) applies vphoned's `trimmed` service profile: Siri and
+intelligence, Find My, Wallet, Watch, Home, health coaching, telemetry, ads, the App Store and
+sign-in follow-ups stay off, so the guest runs about a third fewer processes and uses less memory
+and disk. It does not make the guest itself faster, but it keeps it steadier. The first boot after
+trimming is busy for about ten minutes while widgets settle. The Weather widget then reads "Weather
+Unavailable"; `tools/service-profile.py CID trimmed --allow com.apple.weatherd` keeps it.
 
 `create-vm.sh` menus down to a tested device/iOS pairing, runs the whole create flow
 (`fw prepare` + `fw patch`, the DFU restore, the SSH-ramdisk CFW install, the snapshot flip),

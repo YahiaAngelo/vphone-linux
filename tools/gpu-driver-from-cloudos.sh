@@ -67,10 +67,12 @@ for _ in $(seq 1 60); do "$VC" recovery-probe >/dev/null 2>&1 && break; sleep 3;
 "$VC" recovery-probe || { tools/dfu-diagnose.sh "$RUN"; exit 1; }
 
 echo "=== restoring the stock cloudOS (log: $RUN/restore.log)"
+# restore-wait.sh: the tool can wait forever for the device to come back after a finished
+# restore (issue #19).
 VPHONE_RESTORE_TIMEOUT_SCALE=${VPHONE_RESTORE_TIMEOUT_SCALE:-10} \
-  "$VC" restore -l vms "$NAME" -v > "$RUN/restore.log" 2>&1 \
+  tools/restore-wait.sh "$RUN/restore.log" "$VC" restore -l vms "$NAME" -v \
   || { tail -20 "$RUN/restore.log" >&2; echo "restore failed; log: $RUN/restore.log" >&2; exit 1; }
-grep -q 'Restore Finished' "$RUN/restore.log" || { echo "restore did not finish; log: $RUN/restore.log" >&2; exit 1; }
+grep -q -i 'restore finished' "$RUN/restore.log" || { echo "restore did not finish; log: $RUN/restore.log" >&2; exit 1; }
 stop_vm
 sleep 3
 

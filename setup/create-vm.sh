@@ -4,6 +4,7 @@
 #   ./create-vm.sh                                 # interactive menus
 #   ./create-vm.sh --device "iPhone17,3" --ios 26.6.2
 #   ./create-vm.sh --list                          # devices + tested pairings
+#   ./create-vm.sh --trim ...                      # also turn off ~137 background daemons (see below)
 #   ./create-vm.sh --dry-run --device ... --ios ... # print the pipeline, run nothing
 #
 # The pipeline is vphone-cli's Linux firmware flow (docs/SETUP.md §5) with one
@@ -14,7 +15,7 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 DEVICE=${DEVICE:-} IOS=${IOS:-} CLOUDOS_PICK=${CLOUDOS_PICK:-}
-SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3}
+SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3} TRIM=${TRIM:-0}
 while [ $# -gt 0 ]; do
   case $1 in
     --device)  DEVICE=$2; shift ;;
@@ -24,6 +25,7 @@ while [ $# -gt 0 ]; do
     --scale)   SCALE=$2; shift ;;   # display scale: 1 (default; 2 on iOS 27) | 2 | 3
     --cid)     CID=$2; shift ;;     # the VM's vsock CID (default 3; another VM may hold it)
     --dry-run) DRY=1 ;;
+    --trim)    TRIM=1 ;;            # vphoned's trimmed service profile (tools/service-profile.py)
     --list)    LIST=1 ;;
     -y)        export VSETUP_ASSUME_YES=1 ;;
     *) die "unknown option: $1" ;;
@@ -177,15 +179,15 @@ do_bundle() {
 # ~/.cache/vphone and are reused. Resolved on every run (prepare needs the paths); a download
 # happens only for a file that is not there yet.
 resolve_firmware() {
-  IOS_LOCAL='' CLOUDOS_LOCAL=''
+  IOS_LOCAL='' CLOUDOS_LOCAL='' IOS_SIZE='' CLOUD_SIZE=''
   local ios_file='' ios_url='' cloud_file='' cloud_url='' resolved
   if [ -n "${IPSW_URL:-}" ]; then
     ios_url=$IPSW_URL ios_file=$(basename "$IPSW_URL")
   elif [ -x "$VC" ]; then
     resolved=$(python3 "$VSETUP_ROOT/lib/get-firmware.py" "$VC" "$DEVICE" "$IOS" "$PAIR_CLOUDOS") ||
       die "fw catalog has no pairing for $DEVICE $IOS — pass IPSW_URL= and CLOUDOS_IPSW_URL="
-    IFS=$'\t' read -r ios_file ios_url <<< "$(printf '%s\n' "$resolved" | sed -n 1p)"
-    IFS=$'\t' read -r cloud_file cloud_url <<< "$(printf '%s\n' "$resolved" | sed -n 2p)"
+    IFS=$'\t' read -r ios_file ios_url IOS_SIZE <<< "$(printf '%s\n' "$resolved" | sed -n 1p)"
+    IFS=$'\t' read -r cloud_file cloud_url CLOUD_SIZE <<< "$(printf '%s\n' "$resolved" | sed -n 2p)"
   else
     log "  (vphone-cli not built: firmware resolution skipped)"
     ios_file=$PAIR_IPSW
@@ -199,13 +201,49 @@ resolve_firmware() {
 }
 resolve_firmware
 
+# The size the server reports for URL $1 (empty when it reports none).
+remote_size() {
+  curl -sIL --retry 3 "$1" 2>/dev/null | tr -d '\r' |
+    awk 'tolower($1) == "content-length:" { n = $2 } END { if (n > 0) print n }'
+}
+# Download URL $1 to $2 unless $2 is complete. The download goes to $2.part and resumes there
+# after an interruption (curl -C -); a file is complete when its size is $3 (where the pairing
+# knows it) or the server's, and only a complete one is renamed to $2. A short $2 left by an
+# older run is resumed the same way.
+fetch() {
+  local url=$1 out=$2 want=${3:-} have
+  [ -n "$want" ] || want=$(remote_size "$url")
+  if [ -s "$out" ]; then
+    have=$(stat -c %s "$out")
+    if [ -z "$want" ] || [ "$have" = "$want" ]; then return 0; fi
+    if [ "$have" -lt "$want" ]; then
+      warn "  $(basename "$out") is incomplete ($have of $want bytes): resuming it"
+      mv -f "$out" "$out.part"
+    else
+      warn "  $(basename "$out") is larger than the server's ($have > $want bytes): downloading it again"
+      rm -f "$out"
+    fi
+  fi
+  log "  downloading $(basename "$out")${want:+ ($((want / 1048576)) MiB)}"
+  until curl -L --fail --retry 5 --retry-all-errors -C - -o "$out.part" "$url"; do
+    # 416: the part is already whole (or larger than the file); anything else: try again.
+    [ -n "$want" ] && [ "$(stat -c %s "$out.part" 2>/dev/null || echo 0)" -ge "$want" ] && break
+    warn "  the download stopped; resuming in 10 s (Ctrl+C stops; a re-run resumes too)"
+    sleep 10
+  done
+  have=$(stat -c %s "$out.part")
+  if [ -n "$want" ] && [ "$have" != "$want" ]; then
+    die "$(basename "$out"): $have bytes downloaded, $want expected; delete $out.part and re-run"
+  fi
+  mv -f "$out.part" "$out"
+}
 do_firmware() {
   [ "$DRY" = 1 ] || mkdir -p "$CACHE"
-  if [ -n "$CLOUD_URL" ] && [ ! -s "$CLOUDOS_LOCAL" ]; then
-    dry curl -L --retry 3 -o "$CLOUDOS_LOCAL" "$CLOUD_URL"
+  if [ -n "$CLOUD_URL" ]; then
+    dry fetch "$CLOUD_URL" "$CLOUDOS_LOCAL" "$CLOUD_SIZE"
   fi
-  if [ -n "$IOS_URL" ] && [ ! -s "$IOS_LOCAL" ]; then
-    dry curl -L --retry 3 -o "$IOS_LOCAL" "$IOS_URL"
+  if [ -n "$IOS_URL" ]; then
+    dry fetch "$IOS_URL" "$IOS_LOCAL" "$IOS_SIZE"
   fi
   log "  firmware: $IOS_LOCAL + ${CLOUDOS_LOCAL:-cloudOS $PAIR_CLOUDOS}"
 }
@@ -291,7 +329,10 @@ do_restore() {
   dry "$T/dfu-stop.sh" "$VM"     # a QEMU left by an earlier, failed attempt
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-dfu"
   dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-dfu"; return 1; }
-  dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
+  # restore-wait.sh: the tool can wait forever for the device to come back after a finished
+  # restore (issue #19); the log is $VM/.runs-dfu/restore.log.
+  dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 SHOW=1 "$T/restore-wait.sh" "$VM/.runs-dfu/restore.log" \
+    "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
   dry "$T/dfu-stop.sh" "$VM"     # this VM's QEMU only, matched by its Disk.img
 }
 
@@ -453,6 +494,7 @@ do_first_boot() {
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.skip","params":{"force":true},"id":1}'
     dry python3 "$T/auto-lock-never.py" "$VM" "$CID"
     [ "$SCALE" = 3 ] || dry python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
+    [ "$TRIM" = 0 ] || dry python3 "$T/service-profile.py" "$CID" trimmed
     return 0
   fi
   log "  the first boot migrates iOS's data behind an Apple logo and progress bar (20+ min)"
@@ -465,16 +507,29 @@ do_first_boot() {
   vrpc '{"method":"setup.skip","params":{"force":true},"id":1}'; echo
   unlock_vm
   python3 "$T/auto-lock-never.py" "$VM" "$CID"
+  local restart=0
   if [ "$SCALE" != 3 ]; then
     # iOS 27 also takes the scale from the guest's device tree: set it, then restart the guest
     # (vphoned shuts it down; QEMU exits by itself) so the new scale applies.
     python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
-    log "  restarting the guest for the ${SCALE}x screen"
+    restart=1
+  fi
+  if [ "$TRIM" = 1 ]; then
+    # Takes effect at the next boot, the same restart.
+    python3 "$T/service-profile.py" "$CID" trimmed ||
+      warn "the trimmed profile was not fully applied (see above); the VM works without it"
+    restart=1
+  fi
+  if [ "$restart" = 1 ]; then
+    log "  restarting the guest so the changes apply"
     vrpc '{"method":"system.shutdown","params":{"force":true},"id":1}'; echo
     wait_vm_exit
     boot_vm
     unlock_vm
     if [ "$SCALE" = 1 ]; then python3 "$T/guest-1x-logo.py" "$CID"; fi
+  fi
+  if [ "$TRIM" = 1 ]; then
+    log "  trimmed: this first boot is busy for about 10 minutes while widgets settle"
   fi
 }
 step booted do_first_boot
