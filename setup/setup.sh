@@ -198,19 +198,17 @@ build_reims() {
   make -C "$VSETUP_SRC/reims-vgpu"
 }
 build_qemu() {
+  # Always: ninja rebuilds only what changed, so an update of the qemu submodule (or a newer
+  # reims-vgpu library, which QEMU links statically) reaches the binary.
   local pkgcfg="$VSETUP_SRC/reims-vgpu/target/dist-vulkan/lib/pkgconfig"
-  if [ ! -x "$VSETUP_SRC/qemu/build/qemu-system-aarch64" ] ||
-     [ "$VSETUP_SRC/reims-vgpu/target/dist-vulkan/lib/libreims_vgpu.a" -nt \
-       "$VSETUP_SRC/qemu/build/qemu-system-aarch64" ]; then
-    log " Building QEMU (-M vresearch101) against reims-vgpu"
-    mkdir -p "$VSETUP_SRC/qemu/build"
-    ( export PKG_CONFIG_PATH=$pkgcfg
-      cd "$VSETUP_SRC/qemu/build"
-      [ -f config.status ] || ../configure --target-list=aarch64-softmmu --enable-pvg \
-        --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
-        --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug
-      ninja qemu-system-aarch64 )
-  fi
+  log " Building QEMU (-M vresearch101) against reims-vgpu"
+  mkdir -p "$VSETUP_SRC/qemu/build"
+  ( export PKG_CONFIG_PATH=$pkgcfg
+    cd "$VSETUP_SRC/qemu/build"
+    [ -f config.status ] || ../configure --target-list=aarch64-softmmu --enable-pvg \
+      --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
+      --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug
+    ninja qemu-system-aarch64 )
 }
 build_creator() {
   log " Building vphone-cli's firmware tooling for Linux (vphone-cli $VPHONE_CLI_PUBLIC)"
