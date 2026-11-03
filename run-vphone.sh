@@ -131,6 +131,11 @@ export VPHONE_XPAGE_LINKS=${VPHONE_XPAGE_LINKS:-1}
 # The return's lookup (helper_vphone_lookup_fast) otherwise stalls on that entry's cache miss
 # (38% of its time); inline, QEMU's share of vCPU time fell from 47.8% to 44.6%.
 export VPHONE_RET_PREFETCH=${VPHONE_RET_PREFETCH:-2}
+# Broadcast TLB flushes (XNU's TLBI ...IS, thousands a second) as a barrier: every vCPU flushes its
+# own TLB and the source waits for them, falling back on QEMU's exclusive section (which stops
+# every vCPU) only when one is late (qemu accel/tcg/cputlb.c, QEMU_TLB_UNSYNCED). 0 restores the
+# exclusive section for every flush. Measured: boot to unlock 189-197 s -> 171-187 s.
+export QEMU_TLB_UNSYNCED=${QEMU_TLB_UNSYNCED:-2}
 # Touch: iOS accepts the USB touchscreen (hub port 2.1) as the built-in main-screen digitizer only
 # when its xHCI root port reports the device non-removable (PORTSC Device Removable, hcd-xhci.c).
 # Bit n = xHCI port n; 0x1fe = every port. VPHONE_XHCI_NONREMOVABLE=0 restores QEMU's default.
