@@ -30,21 +30,30 @@ def response(s):
         if not chunk:
             break
         body += chunk
+    if n is not None and len(body) < n:
+        raise ValueError("reply cut short")
     return body if n is None else body[:n]
 
 
 def rpc(cid, method, **params):
+    """One RPC; a reply cut short (vsock now and then closes a large one early) is asked again."""
     body = json.dumps({"method": method, "params": params, "id": 1}).encode()
-    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-    s.settimeout(120)
-    s.connect((cid, PORT))
-    s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
-              b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-    r = json.loads(response(s))
-    s.close()
-    if "error" in r:
-        sys.exit(f"{method}: {r['error']['message']}")
-    return r["result"]
+    for attempt in range(5):
+        s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        s.settimeout(120)
+        s.connect((cid, PORT))
+        s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                  b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        try:
+            r = json.loads(response(s))
+        except ValueError:
+            continue
+        finally:
+            s.close()
+        if "error" in r:
+            sys.exit(f"{method}: {r['error']['message']}")
+        return r["result"]
+    sys.exit(f"{method}: no whole reply in 5 tries")
 
 
 def snapshot(cid):
