@@ -40,3 +40,4 @@ opensshrd/
 sshramdisk/
 linux-create/Shims/libarchive/lib/
 /cpu-tree/
+__pycache__/
