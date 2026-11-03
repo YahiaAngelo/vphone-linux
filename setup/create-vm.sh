@@ -179,15 +179,15 @@ do_bundle() {
 # ~/.cache/vphone and are reused. Resolved on every run (prepare needs the paths); a download
 # happens only for a file that is not there yet.
 resolve_firmware() {
-  IOS_LOCAL='' CLOUDOS_LOCAL=''
+  IOS_LOCAL='' CLOUDOS_LOCAL='' IOS_SIZE='' CLOUD_SIZE=''
   local ios_file='' ios_url='' cloud_file='' cloud_url='' resolved
   if [ -n "${IPSW_URL:-}" ]; then
     ios_url=$IPSW_URL ios_file=$(basename "$IPSW_URL")
   elif [ -x "$VC" ]; then
     resolved=$(python3 "$VSETUP_ROOT/lib/get-firmware.py" "$VC" "$DEVICE" "$IOS" "$PAIR_CLOUDOS") ||
       die "fw catalog has no pairing for $DEVICE $IOS — pass IPSW_URL= and CLOUDOS_IPSW_URL="
-    IFS=$'\t' read -r ios_file ios_url <<< "$(printf '%s\n' "$resolved" | sed -n 1p)"
-    IFS=$'\t' read -r cloud_file cloud_url <<< "$(printf '%s\n' "$resolved" | sed -n 2p)"
+    IFS=$'\t' read -r ios_file ios_url IOS_SIZE <<< "$(printf '%s\n' "$resolved" | sed -n 1p)"
+    IFS=$'\t' read -r cloud_file cloud_url CLOUD_SIZE <<< "$(printf '%s\n' "$resolved" | sed -n 2p)"
   else
     log "  (vphone-cli not built: firmware resolution skipped)"
     ios_file=$PAIR_IPSW
@@ -201,13 +201,49 @@ resolve_firmware() {
 }
 resolve_firmware
 
+# The size the server reports for URL $1 (empty when it reports none).
+remote_size() {
+  curl -sIL --retry 3 "$1" 2>/dev/null | tr -d '\r' |
+    awk 'tolower($1) == "content-length:" { n = $2 } END { if (n > 0) print n }'
+}
+# Download URL $1 to $2 unless $2 is complete. The download goes to $2.part and resumes there
+# after an interruption (curl -C -); a file is complete when its size is $3 (where the pairing
+# knows it) or the server's, and only a complete one is renamed to $2. A short $2 left by an
+# older run is resumed the same way.
+fetch() {
+  local url=$1 out=$2 want=${3:-} have
+  [ -n "$want" ] || want=$(remote_size "$url")
+  if [ -s "$out" ]; then
+    have=$(stat -c %s "$out")
+    if [ -z "$want" ] || [ "$have" = "$want" ]; then return 0; fi
+    if [ "$have" -lt "$want" ]; then
+      warn "  $(basename "$out") is incomplete ($have of $want bytes): resuming it"
+      mv -f "$out" "$out.part"
+    else
+      warn "  $(basename "$out") is larger than the server's ($have > $want bytes): downloading it again"
+      rm -f "$out"
+    fi
+  fi
+  log "  downloading $(basename "$out")${want:+ ($((want / 1048576)) MiB)}"
+  until curl -L --fail --retry 5 --retry-all-errors -C - -o "$out.part" "$url"; do
+    # 416: the part is already whole (or larger than the file); anything else: try again.
+    [ -n "$want" ] && [ "$(stat -c %s "$out.part" 2>/dev/null || echo 0)" -ge "$want" ] && break
+    warn "  the download stopped; resuming in 10 s (Ctrl+C stops; a re-run resumes too)"
+    sleep 10
+  done
+  have=$(stat -c %s "$out.part")
+  if [ -n "$want" ] && [ "$have" != "$want" ]; then
+    die "$(basename "$out"): $have bytes downloaded, $want expected; delete $out.part and re-run"
+  fi
+  mv -f "$out.part" "$out"
+}
 do_firmware() {
   [ "$DRY" = 1 ] || mkdir -p "$CACHE"
-  if [ -n "$CLOUD_URL" ] && [ ! -s "$CLOUDOS_LOCAL" ]; then
-    dry curl -L --retry 3 -o "$CLOUDOS_LOCAL" "$CLOUD_URL"
+  if [ -n "$CLOUD_URL" ]; then
+    dry fetch "$CLOUD_URL" "$CLOUDOS_LOCAL" "$CLOUD_SIZE"
   fi
-  if [ -n "$IOS_URL" ] && [ ! -s "$IOS_LOCAL" ]; then
-    dry curl -L --retry 3 -o "$IOS_LOCAL" "$IOS_URL"
+  if [ -n "$IOS_URL" ]; then
+    dry fetch "$IOS_URL" "$IOS_LOCAL" "$IOS_SIZE"
   fi
   log "  firmware: $IOS_LOCAL + ${CLOUDOS_LOCAL:-cloudOS $PAIR_CLOUDOS}"
 }
@@ -293,7 +329,10 @@ do_restore() {
   dry "$T/dfu-stop.sh" "$VM"     # a QEMU left by an earlier, failed attempt
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-dfu"
   dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-dfu"; return 1; }
-  dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
+  # restore-wait.sh: the tool can wait forever for the device to come back after a finished
+  # restore (issue #19); the log is $VM/.runs-dfu/restore.log.
+  dry env VPHONE_RESTORE_TIMEOUT_SCALE=10 SHOW=1 "$T/restore-wait.sh" "$VM/.runs-dfu/restore.log" \
+    "$VC" restore -l "$VSETUP_DEVICES" "$NAME" --ecid "$ECID" -v
   dry "$T/dfu-stop.sh" "$VM"     # this VM's QEMU only, matched by its Disk.img
 }
 
