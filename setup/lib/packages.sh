@@ -44,7 +44,7 @@ DEBIAN_PKGS=(git gcc g++ clang lld binutils make cmake ninja-build meson
 #  - The running kernel's headers are added by setup.sh (arch_kernel_headers).
 ARCH_PKGS=(git base-devel gcc clang lld binutils make cmake
   ninja meson pkgconf python python-pillow python-setuptools rsync
-  glib2 pixman libslirp libssh zstd nettle gnutls gtk3 sdl2-compat bzip2 zlib
+  glib2 glib2-devel pixman libslirp libssh zstd nettle gnutls gtk3 sdl2-compat bzip2 zlib
   libx11 libxss libxkbcommon wayland vulkan-icd-loader vulkan-headers vulkan-tools
   libxext libxrandr libxcursor libxi libxfixes libxtst libdecor libdrm flex bison dtc
   socat gdb perf usbip sshfs fuse3 7zip zip unzip curl gnupg

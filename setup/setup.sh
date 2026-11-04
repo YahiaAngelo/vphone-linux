@@ -138,6 +138,11 @@ do_phase deps && {
     # shellcheck disable=SC1091  # rustup's env file, outside this checkout
     . "$HOME/.cargo/env"
   fi
+  # Arch's rustup package puts cargo in /usr/bin and writes no ~/.cargo/env, so
+  # `cargo install` binaries (rcodesign) are found only with ~/.cargo/bin on PATH.
+  if [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
+    PATH=$HOME/.cargo/bin:$PATH
+  fi
   if ! have rcodesign; then
     log " Installing rcodesign (apple-codesign)"
     cargo install apple-codesign --locked
@@ -179,7 +184,7 @@ do_phase deps && {
 # The setup lives IN the checkout it builds (VSETUP_SRC defaults to it); a
 # --src DIR still points the build at a second checkout.
 do_phase sources && {
-  if [ ! -d "$VSETUP_SRC/.git" ]; then
+  if [ ! -e "$VSETUP_SRC/.git" ]; then
     log " Cloning vphone-linux ($VPHONE_LINUX_BRANCH) into $VSETUP_SRC"
     mkdir -p "$(dirname "$VSETUP_SRC")"
     git clone --branch "$VPHONE_LINUX_BRANCH" \
@@ -214,7 +219,7 @@ build_creator() {
   log " Building vphone-cli's firmware tooling for Linux (vphone-cli $VPHONE_CLI_PUBLIC)"
   local src="$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_PUBLIC"
   mkdir -p "$(dirname "$src")"
-  if [ ! -d "$src/.git" ]; then
+  if [ ! -e "$src/.git" ]; then   # -e: a git worktree has a .git file, not a folder
     git clone --depth 1 --branch "$VPHONE_CLI_PUBLIC" "$VPHONE_CLI_REPO" "$src"
   fi
   VPHONE_CLI="$src" "$VSETUP_SRC/linux-create/build.sh"
@@ -226,7 +231,7 @@ build_usbmuxd() { "$VSETUP_SRC/tools/build-usbmuxd-32k.sh"; }
 APFS_RW_COMMIT=03187127cd2e62cf78321cdb942eb3a7b17981f9
 build_apfs() {
   local dir="$VSETUP_SRC/.build/linux-apfs-rw"
-  if [ ! -d "$dir/.git" ]; then
+  if [ ! -e "$dir/.git" ]; then
     log " Fetching linux-apfs-rw"
     git clone https://github.com/linux-apfs/linux-apfs-rw.git "$dir"
   fi
