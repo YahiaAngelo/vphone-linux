@@ -10,9 +10,7 @@ symbols (its LC_SYMTAB) and its local symbols, which Apple strips from the image
 the .symbols subcache (dyld_cache_local_symbols_info)."""
 import bisect, collections, mmap, os, struct, sys
 
-D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dsc")
-samples, base = sys.argv[1], int(sys.argv[2], 0)
-top = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+D = os.environ.get("DSC_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dsc")
 
 files = sorted(f for f in os.listdir(D) if f.startswith("dyld_shared_cache_arm64e")
                and not f.endswith(".symbols") and not os.path.islink(os.path.join(D, f)))
@@ -47,7 +45,6 @@ def read(addr, n):
 main = open(os.path.join(D, main_name), "rb").read(0x8000)
 mo = struct.unpack_from("<I", main, 16)[0]
 unslid = struct.unpack_from("<Q", main, mo)[0]
-slide = base - unslid
 io, ic = struct.unpack_from("<II", main, 0x1C0)
 with open(os.path.join(D, main_name), "rb") as fh:
     fh.seek(io)
@@ -129,28 +126,40 @@ def symbols(img_addr):
     return symcache[img_addr]
 
 
-img_c = collections.Counter()
-fn_c = collections.Counter()
-n = 0
-for line in open(samples):
-    for x in line.split():
-        if x[0] != "U":
-            continue
-        n += 1
-        pc = int(x[1:], 16) - slide
-        i = bisect.bisect_right(starts, pc) - 1
-        if i < 0 or pc - starts[i] > 0x10000000:
-            img_c["(not in cache)"] += 1
-            continue
-        name = imgs[i][1].split("/")[-1]
-        img_c[name] += 1
-        s, vals = symbols(starts[i])
-        j = bisect.bisect_right(vals, pc) - 1
-        fn_c[f"{name}`{s[j][1] if j >= 0 else '?'}"] += 1
-print(f"user samples {n}, slide {slide:#x}")
-print("-- images")
-for k, v in img_c.most_common(top // 2):
-    print(f"{100 * v / max(n, 1):5.1f}% {k}")
-print("-- functions")
-for k, v in fn_c.most_common(top):
-    print(f"{100 * v / max(n, 1):5.1f}% {k}")
+def lookup(pc):
+    """(image name, function name) for an unslid shared-cache address, or None outside it."""
+    i = bisect.bisect_right(starts, pc) - 1
+    if i < 0 or pc - starts[i] > 0x10000000:
+        return None
+    name = imgs[i][1].split("/")[-1]
+    s, vals = symbols(starts[i])
+    j = bisect.bisect_right(vals, pc) - 1
+    return name, s[j][1] if j >= 0 else "?"
+
+
+if __name__ == "__main__":
+    samples, base = sys.argv[1], int(sys.argv[2], 0)
+    top = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+    slide = base - unslid
+    img_c = collections.Counter()
+    fn_c = collections.Counter()
+    n = 0
+    for line in open(samples):
+        for x in line.split():
+            if x[0] != "U":
+                continue
+            n += 1
+            pc = int(x[1:], 16) - slide
+            hit = lookup(pc)
+            if hit is None:
+                img_c["(not in cache)"] += 1
+                continue
+            img_c[hit[0]] += 1
+            fn_c[f"{hit[0]}`{hit[1]}"] += 1
+    print(f"user samples {n}, slide {slide:#x}")
+    print("-- images")
+    for k, v in img_c.most_common(top // 2):
+        print(f"{100 * v / max(n, 1):5.1f}% {k}")
+    print("-- functions")
+    for k, v in fn_c.most_common(top):
+        print(f"{100 * v / max(n, 1):5.1f}% {k}")
