@@ -51,6 +51,7 @@ Most changes have a switch, so each can be turned off for an A/B comparison.
 | `apple-gxf` no longer advertises BTI (no Apple core has it) | | Guarded-page checks (about 1.3%) gone |
 | **Jump cache lookup at `BR`/`BLR`/`RET`** without the generic lookup helper: `1` inline in the generated code, `2` the same check in `helper_vphone_lookup_fast` with the TB's flags as constants (smaller code: 322 instead of 346 host bytes per TB) | `VPHONE_INLINE_LOOKUP` (default 2) | Guest code 42% → 50% of vCPU time; `tb_lookup_ptr` 10.2% → 3.4%; `helper_lookup_tb_ptr` 4.3% → 1.0% |
 | **Return-address prefetch**: at each call, the generated code loads the return address's jump cache entry, so the return's lookup does not stall on a cache miss (38% of that lookup's time had been this miss). `2` inline, `1` through a helper, `0` off | `VPHONE_RET_PREFETCH` (launcher default 2) | QEMU's share of vCPU time while paging the home screen 47.8% → 44.6% |
+| **Return-address stack**: each call pushes its return address and the block that call site last returned to on a 32-entry ring per vCPU; a `RET`/`RETAA`/`RETAB` whose target is the top entry jumps straight to that block, without the jump cache lookup, when the block is still valid (a per-vCPU stamp that every jump-cache generation, epoch, ASID switch and flush changes; not invalidated; same flags). Any other return takes the lookup. Checked by `tests/tcg/vphone-ras/` in the QEMU fork | `VPHONE_RAS` (default on, `0` off; `VPHONE_RAS_STATS=1` logs hit rates) | iOS 27 Duo, boot to unlock: 98.6% of returns hit. Under guestbench, QEMU's share of vCPU time 44.4% → 35.0% (`helper_vphone_lookup_fast` 9.6% → 5.4%, qht 2.5% → 0.5%); guestbench 4-9% faster at equal guest load; app switches and unlock (155-160 vs 159-166 s) no slower |
 | **Larger minimum TLB size**: `CPU_TLB_DYN_MIN_BITS` raised from 6 to 10 (compile time). The softmmu TLBs no longer shrink to 64 entries under iOS's constant flushes. 12 made boot 13% slower | | QEMU's share of vCPU time 44.6% → 43.0% |
 | **2 GiB code cache** (x86-64's maximum). iOS's boot alone generates about 5 GB of translated code. With 1 GiB the cache filled every ~3.5 minutes of use (14 full flushes in 49 minutes), and each flush retranslates everything the guest runs next | `TB_SIZE` (launcher, MiB, default 2048) | |
 | **Neon float32 on the host's SIMD**: `FADD`/`FSUB`/`FMUL`/`FMLA`/`FMLS` (vector and by element) compute all lanes with SSE/FMA when the result is exactly softfloat's (inexact already raised, round to nearest, inputs zero or normal, results finite and not tiny); any other vector takes the per-lane path. Checked against softfloat by `tests/fp/vphone-f32-fast.c` in the QEMU fork | `VPHONE_FAST_F32` (default on, `0` off) | iOS 27 (iPhone Duo), app switching: floating point 11.1% → 5.7% of QEMU's time |
@@ -82,7 +83,7 @@ Tried, and left off by default:
 - **Pinning each thread** (`tools/pin-threads.sh`: one vCPU per physical P-core, GPU threads on the
   siblings, the rest on E-cores): no difference on the Settings scroll. It is kept for experiments.
 
-Next candidates, from the profiles: a per-vCPU return-address stack checked at `RET`; indirect `BRAA`/`BR`
+Next candidates, from the profiles: indirect `BRAA`/`BR`
 jumps; an ASID-tagged softmmu TLB, so a context switch costs no full flush.
 
 ### Guest settings
@@ -188,6 +189,7 @@ the launcher overrides some of them (above).
 | `QEMU_TLB_UNSYNCED` | 0 | Broadcast TLB flush mode: 0 synced (upstream), 1 fully async, 2 barrier (flush, then wait up to 1 ms for the others). Relaxed modes are experimental | `accel/tcg/cputlb.c` |
 | `VPHONE_XPAGE_LINKS` | off | Checked cross-page links | `target/arm/tcg/translate-a64.c` |
 | `VPHONE_RET_PREFETCH` | off | Return-address prefetch at calls: `2` inline, `1` through a helper, `0` off (the launcher sets 2) | `target/arm/tcg/translate-a64.c` |
+| `VPHONE_RAS` | on | Return-address stack checked at `RET`/`RETAA`/`RETAB`; `0` = the jump cache lookup for every return. `VPHONE_RAS_STATS=1` (with `-d guest_errors`) logs hits and miss causes | `target/arm/tcg/translate-a64.c`, `accel/tcg/tb-jmp-cache.h` |
 | `VPHONE_NATIVE_FP` | on | A64 FP/Neon as host SSE/AVX instructions; `0` = helpers (and softfloat's hardfloat) as before | `target/arm/tcg/host-fpcr.h`, `translate-a64.c` |
 | `VPHONE_FAST_F32` | on | Neon float32 add/sub/mul/fused multiply-add on the host's SIMD; `0` = softfloat lane by lane | `target/arm/tcg/vec-f32-fast.h` |
 | `VPHONE_INLINE_LOOKUP` | **2** | Jump cache lookup at `BR`/`BLR`/`RET`: `0` off (generic lookup), `1` inline check in generated code, `2` the same check in `helper_vphone_lookup_fast` with the TB's flags as constants (smaller code) | `target/arm/tcg/translate-a64.c` |
