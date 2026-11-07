@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 source "$(pwd)/lib/common.sh"
 
 status=0
+bash test/linux-create-release-cli.sh || status=1
 for f in $(find "$VSETUP_ROOT" -name '*.sh' -type f | sort); do
   bash -n "$f" || { echo "FAIL bash -n $f"; status=1; }
 done
@@ -28,6 +29,9 @@ VSETUP_SRC=/tmp/vs-src VSETUP_RELEASE=/tmp/vs-rel VSETUP_DEVICES=/tmp/vs-dev \
   > /tmp/vs-smoke.log 2>&1 || status=1
 grep -q 'dry-run' /tmp/vs-smoke.log || { echo 'FAIL: no dry-run output'; status=1; }
 bash "$VSETUP_ROOT/test/cache-path.sh" || status=1
+grep -Fq "VC=/tmp/vs-src/linux-create/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli" /tmp/vs-smoke.log || {
+  echo 'FAIL: dry-run did not resolve the Release vphone-cli'; status=1;
+}
 
 if grep -nE '(^|[^[:alnum:]_])(pkill|killall|fuser -k)' setup.sh create-vm.sh lib/common.sh; then
   echo 'FAIL: kill commands are not allowed in setup scripts'; status=1

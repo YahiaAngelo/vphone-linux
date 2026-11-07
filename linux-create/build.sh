@@ -2,7 +2,7 @@
 # Build vphone-cli's firmware tooling for Linux in one step: fetch the pinned
 # vphone-cli tag, sync its sources, install Swift if needed, and build.
 #
-#   linux-create/build.sh            # -> linux-create/vphone-cli (wrapper) works
+#   linux-create/build.sh            # -> Release product used by linux-create/vphone-cli
 #
 # Needs no swiftly env/PATH setup: the pinned toolchain (.swift-version) is
 # installed with swiftly if missing and called by its full path.
@@ -51,5 +51,30 @@ log "Building with Swift $VPHONE_SWIFT_VERSION ($(swift_bin))"
 ld_flags=()
 lld=${VPHONE_SWIFT_LLD:-$([ "$(distro_family)" = arch ] && echo 1 || echo 0)}
 [ "$lld" = 1 ] && ld_flags=(-Xswiftc -use-ld=lld -Xlinker -z -Xlinker nostart-stop-gc)
-swift build --build-system swiftbuild --scratch-path .build/out "${ld_flags[@]}" "$@"
-log "Built: $here/.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli  (or run linux-create/vphone-cli)"
+build_args=("$@")
+configuration=release
+has_configuration=0
+for ((i = 0; i < ${#build_args[@]}; i++)); do
+  case ${build_args[i]} in
+    --configuration|-c)
+      ((i + 1 < ${#build_args[@]})) || die "missing value for ${build_args[i]}"
+      configuration=${build_args[i + 1]}
+      has_configuration=1
+      i=$((i + 1))
+      ;;
+    --configuration=*|-c=*)
+      configuration=${build_args[i]#*=}
+      has_configuration=1
+      ;;
+  esac
+done
+case $configuration in
+  debug) configuration_name=Debug ;;
+  release) configuration_name=Release ;;
+  *) die "configuration must be debug or release: $configuration" ;;
+esac
+if [ "$has_configuration" = 0 ]; then
+  build_args+=(--configuration release)
+fi
+swift build --build-system swiftbuild --scratch-path .build/out "${ld_flags[@]}" "${build_args[@]}"
+log "Built: $here/.build/out/out/Products/$configuration_name-linux-$(uname -m)/vphone-cli  (or run linux-create/vphone-cli)"

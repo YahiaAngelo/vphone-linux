@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 IPSW=$(realpath "${1:?usage: gpu-driver-from-cloudos.sh <cloudOS.ipsw> <out-dir>}")
 OUT=${2:?usage: gpu-driver-from-cloudos.sh <cloudOS.ipsw> <out-dir>}
-VC=${VC:-$PWD/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli}
+VC=${VC:-$PWD/linux-create/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli}
 NAME=gpu-recovery-$$
 VM=vms/$NAME
 RUN=runs/$NAME

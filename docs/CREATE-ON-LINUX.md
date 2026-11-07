@@ -34,7 +34,7 @@ The steps:
 Everything below uses `vms/` as the library and `myphone` as the VM. `VC` is the Linux vphone-cli:
 
 ```sh
-VC=$PWD/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli
+VC=$PWD/linux-create/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli
 ```
 
 ## 1. Make an empty VM bundle
