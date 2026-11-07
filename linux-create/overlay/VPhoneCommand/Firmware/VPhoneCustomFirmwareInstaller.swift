@@ -131,6 +131,10 @@ struct VPhoneCustomFirmwareInstaller {
         let name: String
         let url: URL
         let directory: VPhoneConfinedDirectory
+        let parent: VPhoneConfinedDirectory
+        #if os(Linux)
+        var pendingDyldPublication: VPhoneStagedDyldCache.PendingPublication?
+        #endif
 
         func file(_ name: String) -> URL {
             url.appendingPathComponent(name)
@@ -149,6 +153,13 @@ struct VPhoneCustomFirmwareInstaller {
         // at a time, as in a terminal.
         fflush(stdout)
         setvbuf(stdout, nil, _IOLBF, 0)
+        #if os(Linux)
+        // Also guard early exits such as a changed restore-image preset and
+        // kernel-only updates. No CFW invocation may bypass an unresolved run.
+        _ = try VPhoneStagedDyldCache.PendingPublication(
+            bundleDirectory: pinBundle(owner: VPhoneInvokingUser.current?.uid),
+        )
+        #endif
         if mode == .kernelUpdate {
             try runKernelUpdate()
             return
@@ -193,10 +204,12 @@ struct VPhoneCustomFirmwareInstaller {
         // this VM's kernelcache, which decide the shared region size below.
         var receiptKernel = receipt?.parts[VPhoneVirtualMachinePatchReceipt.part(for: .firmware(.kernelcache))]
             .map { Set($0.patches) }
+        #if !os(Linux)
         let guestTargets = FirmwareGuestPatchResolution.guestTargetIdentifiers
         let effectiveEnabled = Set(plan?.enabledPatches ?? [])
         let priorFallback = Set(rawPlan?.enabledPatches ?? []).intersection(guestTargets)
             .union(Set(Self.lateGuestPatches).intersection(effectiveEnabled))
+        #endif
 #if os(Linux)
         // The VM is booted into the SSH ramdisk and its target volumes are
         // mounted in the guest. The host reaches them over sshfs; the host
@@ -211,7 +224,6 @@ struct VPhoneCustomFirmwareInstaller {
                 receipt: receipt,
                 receiptGuest: receiptGuest,
                 receiptKernel: receiptKernel,
-                priorFallback: priorFallback,
                 invokingUser: invokingUser,
                 callerUID: callerUID,
             )
@@ -1039,25 +1051,34 @@ struct VPhoneCustomFirmwareInstaller {
         owner: (uid: uid_t, gid: gid_t)?,
     ) {
         do {
-            var receipt = (try? bundleDirectory.readData(VPhonePatchPresetStore.receiptFileName))
-                .flatMap { try? VPhoneVirtualMachinePatchReceipt.decode($0) }
-                ?? VPhoneVirtualMachinePatchReceipt()
-            receipt.record(
-                VPhoneVirtualMachinePatchReceipt.guestPart,
-                patches: live,
-                writer: receiptWriter,
-                bundleVersion: bundleVersion,
-                notApplicable: notApplicable,
-            )
-            try bundleDirectory.writeFile(
-                VPhonePatchPresetStore.receiptFileName,
-                contents: receipt.encoded(),
-                mode: 0o777,
-                owner: owner,
-            )
+            try writeGuestReceipt(live: live, notApplicable: notApplicable, in: bundleDirectory, owner: owner)
         } catch {
             fputs("warning: could not record the guest patch receipt: \(error)\n", stderr)
         }
+    }
+
+    private func writeGuestReceipt(
+        live: Set<String>,
+        notApplicable: Set<String>,
+        in bundleDirectory: VPhoneConfinedDirectory,
+        owner: (uid: uid_t, gid: gid_t)?,
+    ) throws {
+        var receipt = (try? bundleDirectory.readData(VPhonePatchPresetStore.receiptFileName))
+            .flatMap { try? VPhoneVirtualMachinePatchReceipt.decode($0) }
+            ?? VPhoneVirtualMachinePatchReceipt()
+        receipt.record(
+            VPhoneVirtualMachinePatchReceipt.guestPart,
+            patches: live,
+            writer: receiptWriter,
+            bundleVersion: bundleVersion,
+            notApplicable: notApplicable,
+        )
+        try bundleDirectory.writeFile(
+            VPhonePatchPresetStore.receiptFileName,
+            contents: receipt.encoded(),
+            mode: 0o777,
+            owner: owner,
+        )
     }
 
     /// This `VPhone.bundle`'s version, for the receipt, or nil for a plain
@@ -1340,6 +1361,7 @@ struct VPhoneCustomFirmwareInstaller {
         kernelPatches: Set<String>?,
         environmentOnly: Bool,
         strict: Bool = false,
+        freshDyldSeed: Bool = false,
     ) throws -> Set<String> {
         var live = Set<String>()
         var failures: [String] = []
@@ -1448,8 +1470,12 @@ struct VPhoneCustomFirmwareInstaller {
             }
         }
 
+        var dyldSeed: VPhoneConfinedDirectory?
         if let restore {
-            try installCryptexes(restore: restore, system: system, work: work, owner: owner, replaceExisting: strict)
+            dyldSeed = try installCryptexes(
+                restore: restore, system: system, work: work, owner: owner, replaceExisting: strict,
+                captureDyldSeed: freshDyldSeed && guestDevice.family == .iPhone,
+            )
         }
         let version = try productVersion(system: system)
 
@@ -1519,7 +1545,40 @@ struct VPhoneCustomFirmwareInstaller {
             ? "System/Library/Caches/com.apple.dyld"
             : "System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
         let cacheArchitecture = guestDevice.hasPlainArm64Userland ? "arm64" : "arm64e"
-        let dsc = try verifiedDyldCacheDirectory(system: system, relative: cacheRelative)
+        let guestDSC = try verifiedDyldCacheDirectory(system: system, relative: cacheRelative)
+        #if os(Linux)
+        // Remote page writes turn a few minutes of host work into hours of
+        // SFTP requests. Keep the complete selected family and undo local.
+        guard let pendingPublication = work.pendingDyldPublication else {
+            throw ValidationError("The Linux cache publication guard was not initialized")
+        }
+        let stagedCache = try VPhoneStagedDyldCache(
+            source: system.directory(cacheRelative),
+            directory: work.directory.directory("dyld-stage", create: true, mode: 0o700),
+            mainName: DyldSharedCacheChunkSet.mainCacheURL(
+                in: URL(fileURLWithPath: guestDSC),
+                architecture: guestDevice.hasPlainArm64Userland ? cacheArchitecture : nil,
+            ).lastPathComponent,
+            pending: pendingPublication,
+            workDirectory: work.directory,
+            workParent: work.parent,
+            seed: dyldSeed,
+        )
+        func validateStagedUndo(_ directory: URL) throws {
+            let undo = directory.appendingPathComponent(Self.dscUndoLogLeaf)
+            if FileManager.default.fileExists(atPath: undo.path) {
+                try DyldSharedCacheUndoLog.decode(Data(contentsOf: undo)).validate(in: directory)
+            }
+        }
+        try validateStagedUndo(stagedCache.beforeURL)
+        let dsc = stagedCache.afterURL.path
+        let dyldSystem = stagedCache.directory
+        let dyldCacheRelative = "after"
+        #else
+        let dsc = guestDSC
+        let dyldSystem = system
+        let dyldCacheRelative = cacheRelative
+        #endif
         let widenedRegion = kernelPatches.map { $0.contains("kernel-boot-shared_region_size") }
             ?? version.hasPrefix("27.")
         let kernelRegionSize = widenedRegion
@@ -1548,7 +1607,8 @@ struct VPhoneCustomFirmwareInstaller {
             // pair or describe it as unchanged via isolate's catch-and-continue.
             let applied = try updateTVDyld(
                 identifier: identifier, enabled: enabled, system: system, work: work,
-                cacheDirectory: URL(fileURLWithPath: dsc), cacheRelative: cacheRelative,
+                cacheDirectory: URL(fileURLWithPath: dsc), cacheRelative: dyldCacheRelative,
+                cacheSystem: dyldSystem,
                 priorApplied: priorGuest.contains(identifier),
             )
             if applied { live.insert(identifier) }
@@ -1754,11 +1814,20 @@ struct VPhoneCustomFirmwareInstaller {
             ("dyld-exp-hv_vmm", "patch-hv-vmm-dsc", [dsc]),
             ("dyld-cfw-camera", "patch-camera-dsc", [dsc, DyldSharedCacheChunkSet.mainCacheURL(in: URL(fileURLWithPath: dsc)).path]),
         ]
+        let failuresBeforeDyld = failures.count
         try applyDyldPatches(
-            dyld, dsc: dsc, cacheRelative: cacheRelative, system: system, plan: plan, priorGuest: priorGuest,
+            dyld, dsc: dsc, cacheRelative: dyldCacheRelative, system: dyldSystem, plan: plan, priorGuest: priorGuest,
             live: &live, failures: &failures,
         )
         try requireX1Bootstrap()
+        #if os(Linux)
+        guard failures.count == failuresBeforeDyld else {
+            throw ValidationError("Local dyld patching failed; cache publication and setup boot stopped. Recovery stage: \(try stagedCache.directory.path)")
+        }
+        try stagedCache.publish(validateUndo: validateStagedUndo) {
+            _ = try tool(vphoneLinuxRoot() + "/tools/ssh-ramdisk.sh", ["sync"], quiet: true)
+        }
+        #endif
 
         // The feature plist exists from iOS 26. Turning the patch off restores
         // the original.
@@ -2487,8 +2556,7 @@ struct VPhoneCustomFirmwareInstaller {
         return plan
     }
 
-    /// The dsc verbs patch a multi-gigabyte folder in place, too large to
-    /// stage. Open it without following any link, require plain single-link
+    /// Open the cache without following any link, require plain single-link
     /// files in it, and hand the tools that verified path. The path is
     /// stable: the volume is mounted inside the root-only work folder and
     /// nothing else writes to it during the install.
@@ -2514,7 +2582,9 @@ struct VPhoneCustomFirmwareInstaller {
         work: WorkDirectory,
         owner: uid_t?,
         replaceExisting: Bool = false,
-    ) throws {
+        captureDyldSeed: Bool = false,
+    ) throws -> VPhoneConfinedDirectory? {
+        var seed: VPhoneConfinedDirectory?
         let os = "System/Cryptexes/OS"
         let app = "System/Cryptexes/App"
         func populated(_ path: String) throws -> Bool {
@@ -2551,7 +2621,7 @@ struct VPhoneCustomFirmwareInstaller {
             try restore.readData("iPhone-BuildManifest.plist").write(to: manifest)
             guard case let .cryptex(paths) = try CustomFirmwareDaemons.filesystemLayout(buildManifest: manifest) else {
                 print("[*] Monolithic tvOS system image: no cryptex files to install")
-                return
+                return nil
             }
             // Root attaches and decrypts only private copies of the images,
             // taken from descriptors verified to be the caller's own files.
@@ -2620,6 +2690,21 @@ struct VPhoneCustomFirmwareInstaller {
                 // mounted nosuid, and the copy never follows a link.
                 try system.removeItem(destination)
                 try system.copyTree(from: source, to: destination, clearSetID: false)
+                #if os(Linux)
+                if captureDyldSeed, destination == os {
+                    let cache = try source.directory("System/Library/Caches/com.apple.dyld")
+                    let main = DyldSharedCacheChunkSet.mainCacheURL(in: URL(fileURLWithPath: try cache.path))
+                    let directory = try work.directory.directory("dyld-source-seed", create: true, mode: 0o700)
+                    if try VPhoneStagedDyldCache.prepareSeed(
+                        from: cache, in: directory, mainName: main.lastPathComponent,
+                        workDirectory: work.directory, workParent: work.parent,
+                    ) {
+                        seed = directory
+                    } else {
+                        try work.directory.removeItem("dyld-source-seed")
+                    }
+                }
+                #endif
             }
             try detachImage(at: appMount, attachment: appAttachment ?? "")
             appAttachment = nil
@@ -2634,6 +2719,7 @@ struct VPhoneCustomFirmwareInstaller {
             target: "../../../../System/Cryptexes/OS/System/DriverKit/System/Library/dyld",
             at: "System/DriverKit/System/Library/dyld",
         )
+        return seed
     }
 
     /// Full OTA chunks contain placeholders, not the removable apps retained
@@ -4040,15 +4126,17 @@ struct VPhoneCustomFirmwareInstaller {
         work: WorkDirectory,
         cacheDirectory: URL,
         cacheRelative: String,
+        cacheSystem: VPhoneConfinedDirectory? = nil,
         priorApplied: Bool,
     ) throws -> Bool {
+        let cacheSystem = cacheSystem ?? system
         let path = "usr/lib/dyld"
         let backup = "\(path).bak"
         let undoPath = "\(cacheRelative)/\(Self.dscUndoLogLeaf)"
         // A corrupt or unreadable undo record is not an absent record: never
         // overwrite it and lose the only original cache bytes.
-        let undo = try system.exists(undoPath)
-            ? DyldSharedCacheUndoLog.decode(system.readData(undoPath))
+        let undo = try cacheSystem.exists(undoPath)
+            ? DyldSharedCacheUndoLog.decode(cacheSystem.readData(undoPath))
             : nil
         let hasUndo = undo?.patchIDs.contains(identifier) == true
         if !enabled, !priorApplied, !hasUndo { return false }
@@ -4078,7 +4166,7 @@ struct VPhoneCustomFirmwareInstaller {
             if let captured = chunks.takeUndoLog(),
                let merged = DyldSharedCacheUndoLog.updated(existing: undo, captured: captured, patchID: identifier)
             {
-                try system.writeFile(undoPath, contents: merged.encoded(), mode: 0o644, owner: Self.guestOwner)
+                try cacheSystem.writeFile(undoPath, contents: merged.encoded(), mode: 0o644, owner: Self.guestOwner)
             }
             try system.replaceFile(path, fromFileAt: staged, mode: 0o755, owner: Self.guestOwner)
             return true
@@ -4095,7 +4183,7 @@ struct VPhoneCustomFirmwareInstaller {
             try system.replaceFile(path, fromFileAt: work.file("dyld-tv-original"), mode: 0o755, owner: Self.guestOwner)
         } retireUndo: {
             guard let undo, hasUndo else { return }
-            try system.writeFile(undoPath, contents: undo.removing(patchIDs: [identifier]).encoded(), mode: 0o644, owner: Self.guestOwner)
+            try cacheSystem.writeFile(undoPath, contents: undo.removing(patchIDs: [identifier]).encoded(), mode: 0o644, owner: Self.guestOwner)
         }
         print("  [+] \(identifier): restored standalone and cached dyld")
         return false
@@ -4298,6 +4386,7 @@ struct VPhoneCustomFirmwareInstaller {
             name: (path as NSString).lastPathComponent,
             url: URL(fileURLWithPath: path, isDirectory: true),
             directory: directory,
+            parent: parent,
         )
     }
 
