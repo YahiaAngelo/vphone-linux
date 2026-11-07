@@ -214,7 +214,9 @@ struct VPhoneCustomFirmwareInstaller {
         // The VM is booted into the SSH ramdisk and its target volumes are
         // mounted in the guest. The host reaches them over sshfs; the host
         // cannot mount the sealed System rw and the live VM is not cloned.
-        let restoreLinux = try restoreTree(in: bundleDirectory, path: bundlePath, owner: callerUID)
+        let restoreLinux = mode == .full
+            ? try restoreTree(in: bundleDirectory, path: bundlePath, owner: callerUID)
+            : nil
         do {
             try runLinuxGuest(
                 bundleDirectory: bundleDirectory,
