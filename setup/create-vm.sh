@@ -14,6 +14,12 @@ set -Eeuo pipefail
 # shellcheck disable=SC1091  # this checkout's own lib/common.sh, resolved at run time
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
+# Keep the old Limulator variable names as fallback aliases for existing callers.
+VPHONE_CREATOR_USB_READY=${VPHONE_CREATOR_USB_READY:-${LIMULATOR_CREATOR_USB_READY:-0}}
+VPHONE_FIRST_BOOT_TIMEOUT=${VPHONE_FIRST_BOOT_TIMEOUT:-${LIMULATOR_FIRST_BOOT_TIMEOUT:-600}}
+VPHONE_SHUTDOWN_TIMEOUT=${VPHONE_SHUTDOWN_TIMEOUT:-${LIMULATOR_SHUTDOWN_TIMEOUT:-120}}
+VPHONE_MIGRATION_TIMEOUT=${VPHONE_MIGRATION_TIMEOUT:-${LIMULATOR_MIGRATION_TIMEOUT:-3600}}
+
 DEVICE=${DEVICE:-} IOS=${IOS:-} CLOUDOS_PICK=${CLOUDOS_PICK:-}
 SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3} TRIM=${TRIM:-0}
 while [ $# -gt 0 ]; do
@@ -327,10 +333,10 @@ do_patch() {
 # /run so a re-run does not start a second one.
 AUTOATTACH_PID=/run/vphone-usbip-autoattach.pid
 usb_helpers() {
-  if [ "${LIMULATOR_CREATOR_USB_READY:-0}" = 1 ]; then
+  if [ "$VPHONE_CREATOR_USB_READY" = 1 ]; then
     case ${USBMUXD_SOCKET_ADDRESS:-} in
       UNIX:/*) ;;
-      *) die "LIMULATOR_CREATOR_USB_READY requires USBMUXD_SOCKET_ADDRESS=UNIX:/absolute/path" ;;
+      *) die "VPHONE_CREATOR_USB_READY requires USBMUXD_SOCKET_ADDRESS=UNIX:/absolute/path" ;;
     esac
     [ "$DRY" = 1 ] || [ -S "${USBMUXD_SOCKET_ADDRESS#UNIX:}" ] ||
       die "the private usbmuxd socket is missing: ${USBMUXD_SOCKET_ADDRESS#UNIX:}"
@@ -467,7 +473,7 @@ running_vm() {
     QEMU_PID=$pid
 }
 boot_vm() {
-  local deadline=$((SECONDS + ${LIMULATOR_FIRST_BOOT_TIMEOUT:-600})) remaining
+  local deadline=$((SECONDS + VPHONE_FIRST_BOOT_TIMEOUT)) remaining
   if running_vm; then
     log "  this VM is already running (QEMU pid $QEMU_PID): waiting for vphoned"
   else
@@ -507,7 +513,7 @@ qemu_exit_report() {
 # Waits for the VM's QEMU to exit (after vphoned shut the guest down); it need not be this
 # shell's child, so its /proc entry is watched.
 wait_vm_exit() {
-  local deadline=$((SECONDS + ${LIMULATOR_SHUTDOWN_TIMEOUT:-120}))
+  local deadline=$((SECONDS + VPHONE_SHUTDOWN_TIMEOUT))
   while qemu_alive; do
     [ "$SECONDS" -lt "$deadline" ] || die "QEMU did not exit before the shutdown timeout; see $VM/serial.log"
     sleep 2
@@ -534,7 +540,7 @@ do_first_boot() {
   fi
   log "  the first boot migrates iOS's data behind an Apple logo and progress bar (20+ min)"
   boot_vm
-  local deadline=$((SECONDS + ${LIMULATOR_MIGRATION_TIMEOUT:-3600})) remaining
+  local deadline=$((SECONDS + VPHONE_MIGRATION_TIMEOUT)) remaining
   while true; do
     remaining=$((deadline - SECONDS))
     [ "$remaining" -gt 0 ] || die "first-boot migration timed out; see $VM/serial.log"
