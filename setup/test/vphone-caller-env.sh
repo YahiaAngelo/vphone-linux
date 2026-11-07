@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise the native caller controls with extracted functions and fake helpers.
-# shellcheck disable=SC1091,SC2034,SC2317  # functions and variables are consumed by extracted callbacks
+# shellcheck disable=SC1091,SC2034,SC2317,SC2329  # functions and variables are consumed by extracted callbacks
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 temporary=$(mktemp -d)
