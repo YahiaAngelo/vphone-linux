@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'setup/**', 'tools/window/**', 'run-vphone.sh', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -55,6 +55,14 @@ jobs:
         run: python3 setup/lib/json_query.py validate
       - name: --list renders
         run: ./setup/create-vm.sh --list
+
+  window-controls:
+    name: window controls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise window controls with mocked RPC
+        run: python3 -m unittest discover -s tools/window -p 'test_*.py' -v
 
   packages:
     name: package names resolve (${{ matrix.image }})
