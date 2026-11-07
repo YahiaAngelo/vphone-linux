@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise the real first-boot function with a fake launcher, without starting a VM.
-# shellcheck disable=SC2317  # mock callbacks are invoked by the sourced boot_vm
+# shellcheck disable=SC2317,SC2329  # mock callbacks are invoked by the sourced boot_vm
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 temporary=$(mktemp -d)
