@@ -184,7 +184,7 @@ fi
 [ -n "${LOG:-}" ] && args+=(-D "$LOG")
 [ -n "${DFLAGS:-}" ] && args+=(-d "$DFLAGS")
 [ -n "${TRACE:-}" ] && args+=(-trace "$TRACE")
-[ -n "${GDB:-}" ] && args+=(-gdb "tcp::$GDB" -S)
+[ -n "${GDB:-}" ] && args+=(-gdb "tcp:127.0.0.1:$GDB" -S)
 
 # Hybrid hosts (this i7-14700K: P-cores 0-15, E-cores 16-27): keep QEMU on the performance
 # cores, where a vCPU thread runs TCG code far faster than on an efficiency core.
