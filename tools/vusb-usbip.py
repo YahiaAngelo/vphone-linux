@@ -60,9 +60,8 @@ MSG_PAYLOAD_MAX = VUSB_MSG_MAX - 6
 # RestoreOS during NORData.  Host URBs are forwarded whole.
 CTRL_TIMEOUT = 5.0
 URB_TIMEOUT = float(os.environ.get("VUSB_URB_TIMEOUT", "30"))
-# Keep the old Limulator variable names as fallback aliases for existing callers.
-USB_TRACE = os.environ.get("VPHONE_USB_TRACE", os.environ.get("LIMULATOR_USB_TRACE")) == "1"
-USB_TRACE_FILE = os.environ.get("VPHONE_USB_TRACE_FILE", os.environ.get("LIMULATOR_USB_TRACE_FILE"))
+USB_TRACE = os.environ.get("VPHONE_USB_TRACE") == "1"
+USB_TRACE_FILE = os.environ.get("VPHONE_USB_TRACE_FILE")
 USB_TRACE_WRITE_FAILED = False
 
 

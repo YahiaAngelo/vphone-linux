@@ -5,10 +5,12 @@ import asyncio
 import errno
 import importlib.util
 import json
+import os
 import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SOURCE = Path(__file__).with_name("vusb-usbip.py")
@@ -48,6 +50,20 @@ class BlockingUSB:
 
 
 class USBIPTests(unittest.TestCase):
+    def test_vphone_trace_settings_are_loaded_from_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trace_path = str(Path(temporary) / "usb-trace.jsonl")
+            try:
+                with patch.dict(os.environ, {
+                    "VPHONE_USB_TRACE": "1",
+                    "VPHONE_USB_TRACE_FILE": trace_path,
+                }):
+                    SPEC.loader.exec_module(vusb_usbip)
+                    self.assertTrue(vusb_usbip.USB_TRACE)
+                    self.assertEqual(vusb_usbip.USB_TRACE_FILE, trace_path)
+            finally:
+                SPEC.loader.exec_module(vusb_usbip)
+
     def test_restore_trace_is_opt_in_and_private(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "usb-trace.jsonl"
