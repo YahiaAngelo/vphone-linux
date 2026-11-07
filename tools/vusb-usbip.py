@@ -375,7 +375,7 @@ class USBIPBridge:
                     task.add_done_callback(lambda done, seq=seqnum:
                                            self._submit_done(done, seq, tasks))
                 elif command == CMD_UNLINK:
-                    rest = await reader.readexactly(20)
+                    rest = await reader.readexactly(44)
                     await self.handle_unlink(rest, writer)
                 else:
                     raise ValueError(f"unsupported USB/IP command {command}")
@@ -464,7 +464,8 @@ class USBIPBridge:
                 log(f"USB/IP URB {seqnum} timed out after {URB_TIMEOUT:g}s")
             status = -errno.ETIMEDOUT
         except asyncio.CancelledError:
-            status = -errno.ECONNRESET
+            # A successful RET_UNLINK completes the canceled URB by itself.
+            return
         except Exception as e:
             log(f"USB/IP URB {seqnum} failed: {e}")
             status = -errno.EIO
@@ -496,16 +497,18 @@ class USBIPBridge:
         await self.write(writer, hdr + (data if direction == 1 else b""))
 
     async def handle_unlink(self, rest, writer):
-        seqnum, devid, direction, ep, target = struct.unpack("!IIIII", rest)
+        seqnum, _devid, _direction, _ep, target = struct.unpack("!IIIII24x", rest)
         pending = self.pending.get(target)
         task = pending[0] if pending else None
-        status = 0 if task and not task.done() else -errno.ENOENT
-        await self.write(writer, struct.pack("!IIIIIi", RET_UNLINK, seqnum,
-                                            devid, direction, ep, status))
-        if status == 0:
+        active = task is not None and not task.done()
+        if active:
+            task.cancel()
+        status = -errno.ECONNRESET if active else 0
+        await self.write(writer, struct.pack("!IIIIIi24x", RET_UNLINK, seqnum,
+                                            0, 0, 0, status))
+        if active:
             _, target_ep, target_direction = pending
             await self.usb.abort(target_ep, target_direction == 1)
-            task.cancel()
 
     async def follow_stages(self):
         """Each guest boot stage presents a new device: on every driver reset, end the USB/IP
