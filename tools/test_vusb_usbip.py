@@ -86,6 +86,10 @@ class USBIPTests(unittest.TestCase):
                 self.assertEqual(record["product_id"], "12ac")
                 self.assertNotIn("payload", record)
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+                path.chmod(0o644)
+                vusb_usbip.usb_trace("usb.detach.complete", reason="test")
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             finally:
                 (vusb_usbip.USB_TRACE,
                  vusb_usbip.USB_TRACE_FILE,
