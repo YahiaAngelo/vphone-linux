@@ -263,7 +263,7 @@ final class StagedDyldCacheTests: XCTestCase {
         try modify(f)
         try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {})
         let completion = VPhoneStagedDyldCache.Completion(sync: { _ in errno = EIO; return -1 })
-        XCTAssertThrowsError(try completion.recordReceipt(in: f.bundle, pending: f.pending) {
+        XCTAssertThrowsError(try completion.recordReceipt(in: f.bundle, pending: f.pending, synchronizeGuest: {}) {
             try f.bundle.writeFile("receipt.json", contents: Data("receipt".utf8), mode: 0o600)
         })
         // Apply the same cleanup decision the installer uses after unwinding.
@@ -273,12 +273,36 @@ final class StagedDyldCacheTests: XCTestCase {
         XCTAssertTrue(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
         XCTAssertFalse(completion.shouldRemoveWork(hasStagedCache: true))
         let success = VPhoneStagedDyldCache.Completion()
-        try success.recordReceipt(in: f.bundle, pending: f.pending) {
+        try success.recordReceipt(in: f.bundle, pending: f.pending, synchronizeGuest: {}) {
             try f.bundle.writeFile("receipt.json", contents: Data("durable receipt".utf8), mode: 0o600)
         }
         XCTAssertTrue(success.shouldRemoveWork(hasStagedCache: true))
         XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
         XCTAssertNoThrow(try VPhoneStagedDyldCache.PendingPublication(bundleDirectory: f.bundle))
+    }
+
+    func testFinalGuestSyncFailureRetainsRecoveryAndSkipsReceipt() throws {
+        let f = try fixture()
+        try modify(f)
+        try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {})
+        let completion = VPhoneStagedDyldCache.Completion()
+        var receiptWritten = false
+
+        XCTAssertThrowsError(try completion.recordReceipt(
+            in: f.bundle,
+            pending: f.pending,
+            synchronizeGuest: { throw CocoaError(.fileWriteUnknown) },
+        ) {
+            receiptWritten = true
+            try f.bundle.writeFile("receipt.json", contents: Data("receipt".utf8), mode: 0o600)
+        })
+
+        XCTAssertFalse(receiptWritten)
+        XCTAssertFalse(try f.bundle.exists("receipt.json"))
+        XCTAssertTrue(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.stage.beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.stage.afterURL.path))
+        XCTAssertFalse(completion.shouldRemoveWork(hasStagedCache: true))
     }
 
     func testPendingJournalFsyncFailureStopsBeforeFirstDestinationWrite() throws {

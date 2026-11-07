@@ -24,6 +24,7 @@ bash "$VSETUP_ROOT/test/release-bundle.sh" || status=1
 "$VSETUP_ROOT/test/vphone-caller-env.sh" || status=1
 bash "$VSETUP_ROOT/test/first-boot-qmp.sh" || status=1
 bash "$VSETUP_ROOT/test/cli-source-ref.sh" || status=1
+"$VSETUP_ROOT/test/pending-cache-boot.sh" || status=1
 
 # dry-run sanity for the reference pairing
 VSETUP_SRC=/tmp/vs-src VSETUP_RELEASE=/tmp/vs-rel VSETUP_DEVICES=/tmp/vs-dev \

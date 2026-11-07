@@ -141,8 +141,14 @@ public final class VPhoneStagedDyldCache {
         public convenience init() { self.init(sync: { Glibc.fsync($0) }) }
         init(sync: @escaping (Int32) -> Int32) { self.sync = sync }
 
-        public func recordReceipt(in directory: VPhoneConfinedDirectory, pending: PendingPublication, write: () throws -> Void) throws {
+        public func recordReceipt(
+            in directory: VPhoneConfinedDirectory,
+            pending: PendingPublication,
+            synchronizeGuest: () throws -> Void,
+            write: () throws -> Void,
+        ) throws {
             try pending.requirePublished()
+            try synchronizeGuest()
             try write()
             guard sync(directory.descriptor) == 0 else {
                 throw Failure("Receipt directory fsync: \(String(cString: strerror(errno)))")

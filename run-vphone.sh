@@ -22,6 +22,11 @@ set -euo pipefail
 
 VM=${1:?usage: run-vphone.sh <vm-dir> [qemu args...]}
 shift
+pending_cache=$VM/.vphone-dsc-pending.json
+if [ -e "$pending_cache" ] || [ -L "$pending_cache" ]; then
+  echo "run-vphone.sh: unresolved dyld cache publication; refusing to boot $VM. Repair the pending publication before retrying." >&2
+  exit 1
+fi
 QEMU=${QEMU:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qemu/build/qemu-system-aarch64}   # this checkout's
 SMP=${SMP:-8}
 MEM=${MEM:-8G}

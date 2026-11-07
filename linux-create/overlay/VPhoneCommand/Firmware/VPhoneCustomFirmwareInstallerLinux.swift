@@ -293,7 +293,9 @@ extension VPhoneCustomFirmwareInstaller {
             work: work,
             owner: invokingUser.map { ($0.uid, $0.gid) },
         )
-        try completion.recordReceipt(in: bundleDirectory, pending: pending) {
+        try completion.recordReceipt(in: bundleDirectory, pending: pending, synchronizeGuest: {
+            _ = try tool(vphoneLinuxRoot() + "/tools/ssh-ramdisk.sh", ["sync"], quiet: true)
+        }) {
             try writeGuestReceipt(
                 live: liveGuest,
                 notApplicable: notApplicableGuest,
