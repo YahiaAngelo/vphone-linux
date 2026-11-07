@@ -83,9 +83,9 @@ Scale 1 is the better choice on WSL: lavapipe's cost grows with the pixel count.
   re-run `create-vm.sh`, which resumes at the first boot. Keep lavapipe small (`LP_NUM_THREADS`);
   `SMP=6` leaves Windows more room.
 - **A restore or SSH-ramdisk boot waits forever for the next USB stage** (`waiting for the next
-  stage's device` in the exporter log). Also seen on Linux (docs/CREATE-ON-LINUX.md §3): stop the
-  VM with `tools/dfu-stop.sh`, and for a restore zero `nvram.bin` and `SEPStorage` again, then
-  re-run `create-vm.sh`.
+  stage's device` in the exporter log). Also seen on Linux (docs/CREATE-ON-LINUX.md §3): re-run
+  `create-vm.sh`. It stops the VM first, and a restore starts again from a blank `Disk.img`,
+  `nvram.bin` and `SEPStorage`.
 
 - **`guest-1x-logo.py` fails with errno 30** (`Creating a temporary file via mktemp failed`) at
   the end of a scale-1 first boot: the system volume stayed read-only after the tool's remount job.
