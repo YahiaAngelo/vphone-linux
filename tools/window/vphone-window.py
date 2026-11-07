@@ -8,9 +8,10 @@ control socket (REIMS_VGPU_WINDOW_CONTROL). It ends when QEMU does.
 
 - Sends the window its button bar (`toolbar ATLAS PX ids`): Home, Lock, Volume up, Volume down,
   Screenshot, and Fold on a foldable guest (an iPhone Duo).
-- Turns each `button ID` the window sends into a vphoned call over vsock (CID, port 1339):
-  `input.button` for the hardware buttons, `screen.screenshot` saved to ~/Pictures/vphone/, and
-  `display.posture` for the fold.
+- Turns each `button ID` the window sends into a vphoned call over vsock (CID, port 1339): Home
+  returns to SpringBoard or wakes and swipes up from a locked screen; Lock powers down an awake
+  screen or wakes a blanked one; volume uses `input.button`, screenshots go to ~/Pictures/vphone/,
+  and Fold uses `display.posture`.
 - On a foldable guest, follows the hinge (`display.orientation`'s `fold_angle`, four times a
   second, a change taken once two reads agree) and rotates the window: open, the guest draws the
   inner display a quarter turn round on the panel, so the window turns it a quarter clockwise and
@@ -24,6 +25,7 @@ import argparse
 import base64
 import datetime
 import json
+import math
 import os
 import select
 import shutil
@@ -107,12 +109,56 @@ class Guest:
                 self.screenshot()
             elif button == "fold":
                 self.fold()
+            elif button in ("home", "lock"):
+                self.button(button)
             else:
                 rpc(self.cid, "input.button", name=button)
         except (OSError, RuntimeError, ValueError) as e:
             log(f"{button}: {e}")
         finally:
             self.busy.release()
+
+    def button(self, button):
+        deadline = time.monotonic() + 15
+
+        def call(method, **params):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("button action timed out")
+            return rpc(self.cid, method, timeout=min(5, remaining), **params)
+
+        name = ("com.apple.springboard.lockstate" if button == "home"
+                else "com.apple.springboard.hasBlankedScreen")
+        state = call("notify.state", name=name)
+        if (not isinstance(state, dict) or type(state.get("state")) is not int
+                or state["state"] not in (0, 1)):
+            raise RuntimeError("guest returned invalid button state")
+        if button == "lock":
+            call("input.button", name="wake" if state["state"] else "power")
+        elif not state["state"]:
+            call("input.button", name="home")
+        else:
+            call("input.button", name="wake")
+            while True:
+                blanked = call("notify.state", name="com.apple.springboard.hasBlankedScreen")
+                if (not isinstance(blanked, dict) or type(blanked.get("state")) is not int
+                        or blanked["state"] not in (0, 1)):
+                    raise RuntimeError("guest returned invalid screen state")
+                if not blanked["state"]:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("button action timed out")
+                time.sleep(min(.15, remaining))
+            screen = call("device.screen")
+            if not isinstance(screen, dict):
+                raise RuntimeError("guest returned invalid screen geometry")
+            width, height = screen.get("width"), screen.get("height")
+            if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not 0 < value <= 16384 or not math.isfinite(value) for value in (width, height)):
+                raise RuntimeError("guest returned invalid screen geometry")
+            call("input.swipe", x1=width * .5, y1=height * .96,
+                 x2=width * .5, y2=height * .30, seconds=.7, steps=20)
 
     def screenshot(self):
         r = rpc(self.cid, "screen.screenshot", timeout=60)
@@ -221,15 +267,20 @@ def main():
             log(f"connected to {a.socket}")
             sent_buttons, rotation = None, None
 
-        o = guest.orientation()
-        if o is not None and foldable is None:
-            foldable = "fold_angle" in o
-            log("foldable guest" if foldable else "guest is not foldable")
-
         buttons = BASE_BUTTONS + (["fold"] if foldable else [])
         if win.sock and buttons != sent_buttons:
             win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
             sent_buttons = buttons
+
+        o = guest.orientation() if foldable is not False else None
+        if o is not None and foldable is None:
+            foldable = "fold_angle" in o
+            log("foldable guest" if foldable else "guest is not foldable")
+            if foldable:
+                buttons = BASE_BUTTONS + ["fold"]
+                if win.sock and buttons != sent_buttons:
+                    win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
+                    sent_buttons = buttons
 
         if foldable and o is not None and o.get("fold_angle") is not None:
             want = 90 if o["fold_angle"] >= 90 else 0
