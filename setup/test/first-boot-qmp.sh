@@ -14,7 +14,7 @@ EOF
 chmod 700 "$temporary/fake launcher.sh"
 
 run_case() {
-  local name=$1 generic=$2 legacy=$3 running=$4 selected=$5
+  local name=$1 socket=$2 running=$3 selected=$4
   local directory=$temporary/$name
   mkdir -p "$directory/VM with spaces"
   printf 'not launched' > "$directory/arguments"
@@ -23,9 +23,8 @@ run_case() {
     export VM="$directory/VM with spaces" QEMU_RUN="$temporary/fake launcher.sh"
     export QEMU_PIDFILE="$VM/.qemu.pid" ARG_LOG="$directory/arguments"
     export GFX=1 WINDOW=0 CID=41
-    unset VPHONE_FIRST_BOOT_QMP LIMULATOR_FIRST_BOOT_QMP
-    [ -z "$generic" ] || export VPHONE_FIRST_BOOT_QMP=$generic
-    [ -z "$legacy" ] || export LIMULATOR_FIRST_BOOT_QMP=$legacy
+    unset VPHONE_FIRST_BOOT_QMP
+    [ -z "$socket" ] || export VPHONE_FIRST_BOOT_QMP=$socket
     log() { :; }
     vphoned_up() { return 0; }
     running_vm() { QEMU_PID=987654; [ "$running" = yes ]; }
@@ -57,10 +56,7 @@ run_case() {
 }
 
 socket="$temporary/private run \"quoted\" \$(literal); path/qmp.sock"
-legacy_socket="$temporary/legacy.sock"
-run_case unset '' '' no ''
-run_case opt-in "$socket" '' no "$socket"
-run_case legacy '' "$legacy_socket" no "$legacy_socket"
-run_case preferred "$socket" "$legacy_socket" no "$socket"
-run_case already-running "$socket" '' yes ''
+run_case unset '' no ''
+run_case opt-in "$socket" no "$socket"
+run_case already-running "$socket" yes ''
 printf 'OK: first-boot QMP stays optional and never relaunches a running VM\n'

@@ -445,7 +445,7 @@ boot_vm() {
   if running_vm; then
     log "  this VM is already running (QEMU pid $QEMU_PID): waiting for vphoned"
   else
-    local qmp_socket=${VPHONE_FIRST_BOOT_QMP:-${LIMULATOR_FIRST_BOOT_QMP:-}}
+    local qmp_socket=${VPHONE_FIRST_BOOT_QMP:-}
     local -a qmp_args=()
     if [ -n "$qmp_socket" ]; then
       qmp_args=(-qmp "unix:$qmp_socket,server=on,wait=off")
