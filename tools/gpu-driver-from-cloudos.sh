@@ -26,8 +26,18 @@ BUNDLE=Volume1/System/Library/Extensions/AppleParavirtGPUMetalIOGPUFamily.bundle
 
 command -v 7z >/dev/null || { echo "7z (7-Zip) is needed" >&2; exit 1; }
 [ -x "$VC" ] || { echo "build vphone-cli first (linux-create/)" >&2; exit 1; }
-pgrep -f 'usbmuxd-32k/usbmuxd' >/dev/null || { echo "start the 32 KiB usbmuxd first: sudo tools/usbmuxd-32k.sh" >&2; exit 1; }
-pgrep -f 'usbip-autoattach.sh' >/dev/null || { echo "start the USB/IP attacher first: sudo tools/usbip-autoattach.sh" >&2; exit 1; }
+if [ "${LIMULATOR_CREATOR_USB_READY:-0}" = 1 ]; then
+  case ${USBMUXD_SOCKET_ADDRESS:-} in
+    UNIX:/*) ;;
+    *) echo "private USB helpers require USBMUXD_SOCKET_ADDRESS=UNIX:/absolute/path" >&2; exit 1 ;;
+  esac
+  [ -S "${USBMUXD_SOCKET_ADDRESS#UNIX:}" ] || {
+    echo "private usbmuxd socket missing: ${USBMUXD_SOCKET_ADDRESS#UNIX:}" >&2; exit 1;
+  }
+else
+  pgrep -f 'usbmuxd-32k/usbmuxd' >/dev/null || { echo "start the 32 KiB usbmuxd first: sudo tools/usbmuxd-32k.sh" >&2; exit 1; }
+  pgrep -f 'usbip-autoattach.sh' >/dev/null || { echo "start the USB/IP attacher first: sudo tools/usbip-autoattach.sh" >&2; exit 1; }
+fi
 [ -e "$OUT/AppleParavirtGPUMetalIOGPUFamily.bundle" ] && { echo "$OUT/AppleParavirtGPUMetalIOGPUFamily.bundle exists" >&2; exit 1; }
 
 stop_vm() {
@@ -39,7 +49,9 @@ stop_vm() {
   done
   return 0
 }
+created_vm=0
 cleanup() {
+  [ "$created_vm" = 1 ] || return 0
   stop_vm
   if [ "${KEEP:-0}" != 1 ]; then rm -rf "$VM"; fi
 }
@@ -47,6 +59,10 @@ trap cleanup EXIT
 
 echo "=== temporary VM $VM"
 tools/new-vm.sh "$VM" >/dev/null
+created_vm=1
+# Lock the actual disk inode. The descriptor remains open across the restore's children.
+exec {GPU_DISK_LOCK}<>"$VM/Disk.img"
+flock -n "$GPU_DISK_LOCK" || { echo "temporary VM disk is already locked: $VM/Disk.img" >&2; exit 1; }
 echo "=== unzipping $(basename "$IPSW") as its restore tree"
 unzip -q "$IPSW" -d "$VM/iPhonePCC_Restore"
 # The temporary VM reports iPhone99,11, which cloudOS releases after the 26.4 beta leave out of

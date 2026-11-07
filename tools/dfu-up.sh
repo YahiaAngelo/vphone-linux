@@ -17,6 +17,24 @@ mkdir -p "${2:?usage: dfu-up.sh <vm-dir> <run-dir>}"
 R=$(realpath "$2")
 cd "$(dirname "$0")/.."
 SOCK=$R/vusb.sock
+EXPORTER=$PWD/tools/vusb-usbip.py
+EXPORTER_PID_FILE=$R/usbip-exporter.pid
+# A PID can be reused. The recorded start time and both exact arguments must
+# still identify this run's exporter before timeout is asked to stop it.
+stop_previous_exporter() {
+  local pid started extra current
+  [ -f "$EXPORTER_PID_FILE" ] || return 0
+  read -r pid started extra < "$EXPORTER_PID_FILE" || return 0
+  [[ $pid =~ ^[0-9]+$ && $started =~ ^[0-9]+$ && -z $extra ]] || {
+    echo "invalid exporter identity: $EXPORTER_PID_FILE" >&2; return 1;
+  }
+  [ -r "/proc/$pid/stat" ] || return 0
+  current=$(sed 's/^.*) //' "/proc/$pid/stat" | awk '{print $20}')
+  [ "$current" = "$started" ] || return 0
+  tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fx -- "$EXPORTER" >/dev/null || return 0
+  tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fx -- "$SOCK" >/dev/null || return 0
+  kill "$pid"
+}
 # Never two guests on one disk (the drives are opened without locking). Checked first, before
 # anything is stopped: a VM from another run on this disk is refused; this run's own is restarted.
 want=$(stat -L -c %d:%i "$VM/Disk.img")
@@ -31,11 +49,8 @@ for p in $(pgrep -x qemu-system-aar || true); do
   case $cmd in *"$SOCK"*) continue ;; esac
   echo "a VM is already running $VM (QEMU pid $p); stop it first: tools/dfu-stop.sh $VM" >&2; exit 2
 done
-# Any exporter, not only this run's: one left from an earlier run keeps 127.0.0.1:3240 and
-# serves a VM that is gone, and the new one cannot bind.
-for p in $(pgrep -x python3 || true); do
-  tr '\0' ' ' </proc/$p/cmdline 2>/dev/null | grep -q 'tools/vusb-usbip.py ' && kill "$p"
-done
+# An exporter belonging to another run is never stopped to free the USB/IP port.
+stop_previous_exporter
 for p in $(pgrep -x qemu-system-aar || true); do
   tr '\0' ' ' </proc/$p/cmdline | grep -q -- "$SOCK" && kill "$p"
 done
@@ -49,6 +64,9 @@ rm -f "$SOCK"
 for _ in $(seq 1 30); do [ -S "$SOCK" ] && break; sleep 1; done
 [ -S "$SOCK" ] || { echo "QEMU did not start; see $R/stderr.log" >&2; exit 1; }
 sleep 20   # AVPBooter reaches DFU
-(VUSB_DEBUG=${VUSB_EXPORTER_DEBUG:-} VUSB_URB_TIMEOUT=${VUSB_URB_TIMEOUT:-300} timeout 14400 \
-  python3 -u tools/vusb-usbip.py "$SOCK" > "$R/usbip.log" 2>&1 &)
+VUSB_DEBUG=${VUSB_EXPORTER_DEBUG:-} VUSB_URB_TIMEOUT=${VUSB_URB_TIMEOUT:-300} timeout 14400 \
+  python3 -u "$EXPORTER" "$SOCK" > "$R/usbip.log" 2>&1 &
+exporter_pid=$!
+exporter_started=$(sed 's/^.*) //' "/proc/$exporter_pid/stat" | awk '{print $20}')
+printf '%s %s\n' "$exporter_pid" "$exporter_started" > "$EXPORTER_PID_FILE"
 echo "DFU VM up; exporter log $R/usbip.log. Attach with: sudo tools/usbip-autoattach.sh"

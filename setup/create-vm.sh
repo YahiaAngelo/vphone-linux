@@ -168,6 +168,21 @@ do_sanity() {
 }
 
 do_bundle() {
+  if [ "$DRY" = 0 ] && [ -e "$VM/Disk.img" ]; then
+    local file
+    for file in config.plist ecid nvram.bin SEPStorage OpenAVB.bin OpenSEP.bin gfx-res gfx-res.3x; do
+      [ -s "$VM/$file" ] || die "existing Disk.img has an incomplete VM bundle ($file missing); preserve and inspect $VM"
+    done
+    ECID=$(cat "$VM/ecid")
+    log "  keeping the existing VM bundle and disk: $VM"
+    return 0
+  fi
+  if [ "$DRY" = 0 ]; then
+    local file
+    for file in config.plist ecid nvram.bin SEPStorage; do
+      [ ! -e "$VM/$file" ] || die "refusing to replace the partial VM bundle: $VM/$file"
+    done
+  fi
   dry python3 "$VSETUP_ROOT/lib/make-bundle.py" "$VM" "$DEVICE" "$SCALE"
   dry cp "$VSETUP_SRC/OpenAVB/OpenAVB.bin" "$VM/OpenAVB.bin"
   dry cp "$VSETUP_SRC/OpenSEP/OpenSEP.bin" "$VM/OpenSEP.bin"
@@ -277,14 +292,14 @@ do_prepare() {
   [ "$DRY" = 1 ] || [ -d "$gpu_bundle" ] || die "GPU driver bundle not found. Re-run ./setup/create-vm.sh (its gpu-driver step extracts it), or
      • copy one to $VSETUP_RELEASE/AppleParavirtGPUMetalIOGPUFamily.bundle,
      • or set GPU_DRIVER_BUNDLE=/path/to/AppleParavirtGPUMetalIOGPUFamily.bundle"
-  # An existing restore tree is a prepare that did not finish (or a patch that failed part way,
-  # which leaves files patched in place with no originals kept): fw prepare refuses to overwrite
-  # it, so it goes, and the firmware is prepared again from the IPSWs.
-  local tree
+  # Keep partial work for inspection before preparing a fresh tree from the IPSWs.
+  local tree backup
   for tree in "$VM"/*_Restore "$VM/FirmwareOriginals"; do
     [ -e "$tree" ] || continue
-    log "  removing the unfinished $(basename "$tree") of an earlier run"
-    dry rm -rf "$tree"
+    backup=$tree.incomplete-$(date -u +%Y%m%dT%H%M%S%N)-$$
+    while [ -e "$backup" ]; do backup=$backup-1; done
+    log "  preserving the unfinished $(basename "$tree") at $backup"
+    dry mv -- "$tree" "$backup"
   done
   dry "$VC" fw prepare -l "$VSETUP_DEVICES" "$NAME" \
       -i "${IPSW_URL:-$IOS_LOCAL}" -c "${CLOUDOS_LOCAL:-$PAIR_CLOUDOS}" \
@@ -312,6 +327,16 @@ do_patch() {
 # /run so a re-run does not start a second one.
 AUTOATTACH_PID=/run/vphone-usbip-autoattach.pid
 usb_helpers() {
+  if [ "${LIMULATOR_CREATOR_USB_READY:-0}" = 1 ]; then
+    case ${USBMUXD_SOCKET_ADDRESS:-} in
+      UNIX:/*) ;;
+      *) die "LIMULATOR_CREATOR_USB_READY requires USBMUXD_SOCKET_ADDRESS=UNIX:/absolute/path" ;;
+    esac
+    [ "$DRY" = 1 ] || [ -S "${USBMUXD_SOCKET_ADDRESS#UNIX:}" ] ||
+      die "the private usbmuxd socket is missing: ${USBMUXD_SOCKET_ADDRESS#UNIX:}"
+    log "  using the creator's private usbmuxd and USB/IP helpers"
+    return 0
+  fi
   # `sudo true`, not `sudo -v`: -v asks for a password unless every sudoers entry is NOPASSWD
   # (verifypw=all), so a NOPASSWD rule next to the usual wheel one would still prompt.
   dry sudo true
@@ -427,9 +452,9 @@ step cfw      do_cfw
 # The only place a VM is started: once (twice when the scale needs the guest's device tree
 # changed, after vphoned has shut the guest down), in the background, for THIS VM alone.
 # vphoned answers slowly while the first boot migrates (30 s and more): long timeouts throughout.
-vrpc() { CID=$CID VPHONED_TIMEOUT=120 "$T/vphoned.sh" POST /v1/rpc "$1"; }
+vrpc() { CID=$CID VPHONED_TIMEOUT=${2:-120} timeout "${2:-120}" "$T/vphoned.sh" POST /v1/rpc "$1"; }
 vphoned_up() {
-  CID=$CID VPHONED_TIMEOUT=120 timeout 150 "$T/vphoned.sh" GET /v1/health 2>/dev/null | grep -q '"status":"ok"'
+  CID=$CID VPHONED_TIMEOUT=120 timeout "${1:-150}" "$T/vphoned.sh" GET /v1/health 2>/dev/null | grep -q '"status":"ok"'
 }
 # The VM this script started, by the pid it recorded: still this VM's QEMU (it has this VM's
 # Disk.img open) after a re-run. One known pid is checked; no process is searched for.
@@ -442,6 +467,7 @@ running_vm() {
     QEMU_PID=$pid
 }
 boot_vm() {
+  local deadline=$((SECONDS + ${LIMULATOR_FIRST_BOOT_TIMEOUT:-600})) remaining
   if running_vm; then
     log "  this VM is already running (QEMU pid $QEMU_PID): waiting for vphoned"
   else
@@ -450,9 +476,14 @@ boot_vm() {
     printf '%s\n' "$QEMU_PID" > "$QEMU_PIDFILE"
     log "  QEMU output → $VM/serial.log; waiting for vphoned"
   fi
-  until vphoned_up; do
+  while true; do
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || die "vphoned did not become ready before the boot timeout; see $VM/serial.log"
+    vphoned_up "$((remaining < 150 ? remaining : 150))" && break
     qemu_alive || { echo >&2; qemu_exit_report; die "QEMU exited; see $VM/serial.log"; }
-    sleep 10; printf '.' >&2
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || die "vphoned did not become ready before the boot timeout; see $VM/serial.log"
+    sleep "$((remaining < 10 ? remaining : 10))"; printf '.' >&2
   done
   echo >&2
 }
@@ -476,7 +507,11 @@ qemu_exit_report() {
 # Waits for the VM's QEMU to exit (after vphoned shut the guest down); it need not be this
 # shell's child, so its /proc entry is watched.
 wait_vm_exit() {
-  while [ -d "/proc/$QEMU_PID" ]; do sleep 2; done
+  local deadline=$((SECONDS + ${LIMULATOR_SHUTDOWN_TIMEOUT:-120}))
+  while qemu_alive; do
+    [ "$SECONDS" -lt "$deadline" ] || die "QEMU did not exit before the shutdown timeout; see $VM/serial.log"
+    sleep 2
+  done
 }
 unlock_vm() {
   local i
@@ -499,9 +534,16 @@ do_first_boot() {
   fi
   log "  the first boot migrates iOS's data behind an Apple logo and progress bar (20+ min)"
   boot_vm
-  until vrpc '{"method":"setup.status","params":{},"id":1}' 2>/dev/null |
-      grep -q '"data_migration_done":true'; do
-    sleep 30; printf '.' >&2
+  local deadline=$((SECONDS + ${LIMULATOR_MIGRATION_TIMEOUT:-3600})) remaining
+  while true; do
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || die "first-boot migration timed out; see $VM/serial.log"
+    vrpc '{"method":"setup.status","params":{},"id":1}' "$((remaining < 120 ? remaining : 120))" 2>/dev/null |
+      grep -q '"data_migration_done":true' && break
+    qemu_alive || { qemu_exit_report; die "QEMU exited during migration; see $VM/serial.log"; }
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || die "first-boot migration timed out; see $VM/serial.log"
+    sleep "$((remaining < 30 ? remaining : 30))"; printf '.' >&2
   done
   echo >&2
   vrpc '{"method":"setup.skip","params":{"force":true},"id":1}'; echo
