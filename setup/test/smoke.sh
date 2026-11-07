@@ -17,6 +17,7 @@ fi
 python3 "$VSETUP_ROOT/lib/json_query.py" validate || status=1
 "$VSETUP_ROOT/create-vm.sh" --list >/dev/null || status=1
 "$VSETUP_ROOT/test/run-vphone-gdb.sh" || status=1
+"$VSETUP_ROOT/test/vphone-caller-env.sh" || status=1
 
 # dry-run sanity for the reference pairing
 VSETUP_SRC=/tmp/vs-src VSETUP_RELEASE=/tmp/vs-rel VSETUP_DEVICES=/tmp/vs-dev \
