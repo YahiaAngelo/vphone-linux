@@ -159,7 +159,7 @@ final class StagedDyldCacheTests: XCTestCase {
         let symbols = try f.remote.openRegularFile(f.main + ".symbols")
         let attribute = Data("preserve me".utf8)
         attribute.withUnsafeBytes { bytes in
-            XCTAssertEqual(fsetxattr(original.descriptor, "user.limulator-test", bytes.baseAddress, bytes.count, 0), 0)
+            XCTAssertEqual(fsetxattr(original.descriptor, "user.vphone-test", bytes.baseAddress, bytes.count, 0), 0)
         }
         try modify(f)
         // Force ordinary short positive writes: the copy must complete them.
@@ -175,7 +175,7 @@ final class StagedDyldCacheTests: XCTestCase {
         XCTAssertEqual(current.owner, original.owner)
         XCTAssertEqual(try f.remote.openRegularFile(f.main + ".symbols").inode, symbols.inode)
         var bytes = [UInt8](repeating: 0, count: attribute.count)
-        XCTAssertEqual(fgetxattr(current.descriptor, "user.limulator-test", &bytes, bytes.count), attribute.count)
+        XCTAssertEqual(fgetxattr(current.descriptor, "user.vphone-test", &bytes, bytes.count), attribute.count)
         XCTAssertEqual(Data(bytes), attribute)
         XCTAssertEqual(try manifest(f).published, [f.main, VPhoneStagedDyldCache.undoName])
     }
