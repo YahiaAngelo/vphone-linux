@@ -61,7 +61,7 @@ else
 fi
 [[ $result == 127 ]] || fail "missing Release product returned $result instead of 127"
 grep -Fq 'Release vphone-cli is not built:' "$tmp/missing.stderr" || fail "missing Release message was not printed"
-grep -Fq 'uv run limulator bootstrap cli' "$tmp/missing.stderr" || fail "bootstrap guidance was not printed"
+grep -Fq 'From the vphone-linux checkout, run: ./linux-create/build.sh' "$tmp/missing.stderr" || fail "native build guidance was not printed"
 [[ ! -e "$build_marker" ]] || fail "wrapper tried to build the product on invocation"
 printf 'ok: missing Release product fails without building or falling back to Debug\n'
 

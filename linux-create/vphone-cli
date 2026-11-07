@@ -8,7 +8,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 bin=$here/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli
 if [ ! -x "$bin" ]; then
   echo "Release vphone-cli is not built: $bin" >&2
-  echo "From the Limulator checkout, run: uv run limulator bootstrap cli" >&2
+  echo "From the vphone-linux checkout, run: ./linux-create/build.sh" >&2
   exit 127
 fi
 exec "$bin" "$@"
