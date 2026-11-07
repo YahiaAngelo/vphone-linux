@@ -26,7 +26,7 @@ BUNDLE=Volume1/System/Library/Extensions/AppleParavirtGPUMetalIOGPUFamily.bundle
 
 command -v 7z >/dev/null || { echo "7z (7-Zip) is needed" >&2; exit 1; }
 [ -x "$VC" ] || { echo "build vphone-cli first (linux-create/)" >&2; exit 1; }
-if [ "${VPHONE_CREATOR_USB_READY:-${LIMULATOR_CREATOR_USB_READY:-0}}" = 1 ]; then
+if [ "${VPHONE_CREATOR_USB_READY:-0}" = 1 ]; then
   case ${USBMUXD_SOCKET_ADDRESS:-} in
     UNIX:/*) ;;
     *) echo "VPHONE_CREATOR_USB_READY requires USBMUXD_SOCKET_ADDRESS=UNIX:/absolute/path" >&2; exit 1 ;;
