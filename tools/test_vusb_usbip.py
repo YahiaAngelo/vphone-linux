@@ -4,7 +4,9 @@
 import asyncio
 import errno
 import importlib.util
+import json
 import struct
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -46,6 +48,33 @@ class BlockingUSB:
 
 
 class USBIPTests(unittest.TestCase):
+    def test_restore_trace_is_opt_in_and_private(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "usb-trace.jsonl"
+            previous = (
+                vusb_usbip.USB_TRACE,
+                vusb_usbip.USB_TRACE_FILE,
+                vusb_usbip.USB_TRACE_WRITE_FAILED,
+            )
+            try:
+                vusb_usbip.USB_TRACE_FILE = str(path)
+                vusb_usbip.USB_TRACE_WRITE_FAILED = False
+                vusb_usbip.USB_TRACE = False
+                vusb_usbip.usb_trace("usb.discover.complete", product_id="12ac")
+                self.assertFalse(path.exists())
+
+                vusb_usbip.USB_TRACE = True
+                vusb_usbip.usb_trace("usb.discover.complete", product_id="12ac", interface_count=1)
+                record = json.loads(path.read_text().strip())
+                self.assertEqual(record["event"], "usb.discover.complete")
+                self.assertEqual(record["product_id"], "12ac")
+                self.assertNotIn("payload", record)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            finally:
+                (vusb_usbip.USB_TRACE,
+                 vusb_usbip.USB_TRACE_FILE,
+                 vusb_usbip.USB_TRACE_WRITE_FAILED) = previous
+
     def test_unlink_consumes_full_request_and_cancels_target_urb(self):
         async def exercise():
             reader = asyncio.StreamReader()
