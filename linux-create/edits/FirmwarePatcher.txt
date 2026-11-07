@@ -1,3 +1,7 @@
 # AnyObject has no dynamic isEqual on Linux; compare as one-element NSArrays (same Foundation equality).
 CustomFirmware/CustomFirmwareVirtualAudioGraphConfigurations.swift	s/\(have as AnyObject\)\.isEqual\(want\)/NSArray(object: have).isEqual(to: [want])/
 Binary/IM4PHandler.swift	s/compression: lzfseFourCCs\.contains\(original\.fourcc\) \? "lzfse" : nil,/compression: (lzfseFourCCs.contains(original.fourcc) \&\& ProcessInfo.processInfo.environment["VPHONE_NO_LZFSE"] == nil) ? "lzfse" : nil,/
+# The manifest refresh after `fw patch --restore-*` decrypts each AEA-wrapped component (the OS
+# image, 7.8 GiB for iOS 26.6.2) with macOS's /usr/bin/aea only to hash it, and fails on Linux.
+# Nothing rewrites an AEA component, so its manifest digest is kept instead.
+Manifest/ManifestHashPatcher.swift	s#^( *)if try Self\.isAEA\(componentURL\) \{$#&\n\1    // Without /usr/bin/aea (Linux), keep the digest the manifest already has: no\n\1    // patch rewrites an AEA-wrapped component, so it still describes the image.\n\1    if dict["Digest"] is Data, !FileManager.default.isExecutableFile(atPath: "/usr/bin/aea") {\n\1        newBuildIdentityManifest[comp] = dict\n\1        continue\n\1    }#
