@@ -17,6 +17,12 @@ start it.
 > The rest of this guide is the manual path — the same steps, every command visible — plus the
 > parts the two scripts do not cover (your own apps, performance tuning).
 
+For optional QMP control during the first boot started by `setup/create-vm.sh`, set
+`VPHONE_FIRST_BOOT_QMP` to a fresh Unix socket path in a directory you own with mode `0700`.
+The listener does not wait for a client. An already running VM is reused without changing its
+QMP configuration or restarting it. Leaving both variables unset adds no QMP listener.
+`LIMULATOR_FIRST_BOOT_QMP` is also accepted when `VPHONE_FIRST_BOOT_QMP` is unset or empty.
+
 1. [What you need](#1-what-you-need)
 2. [Install the dependencies](#2-install-the-dependencies)
 3. [Build](#3-build)
