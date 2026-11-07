@@ -16,10 +16,13 @@ the bridge starts. USB/IP listens on 127.0.0.1:3240 by default.
 import argparse
 import asyncio
 import collections
+import datetime
 import errno
+import json
 import os
 import struct
 import sys
+import time
 
 USBIP_VERSION = 0x0111
 OP_REQ_IMPORT = 0x8003
@@ -57,10 +60,50 @@ MSG_PAYLOAD_MAX = VUSB_MSG_MAX - 6
 # RestoreOS during NORData.  Host URBs are forwarded whole.
 CTRL_TIMEOUT = 5.0
 URB_TIMEOUT = float(os.environ.get("VUSB_URB_TIMEOUT", "30"))
+USB_TRACE = os.environ.get("LIMULATOR_USB_TRACE") == "1"
+USB_TRACE_FILE = os.environ.get("LIMULATOR_USB_TRACE_FILE")
+USB_TRACE_WRITE_FAILED = False
 
 
 def log(*args):
     print(*args, file=sys.stderr, flush=True)
+
+
+def usb_trace(event, **fields):
+    """Append one opt-in event without USB transfer or descriptor contents."""
+    global USB_TRACE_WRITE_FAILED
+    if not USB_TRACE:
+        return
+    if not USB_TRACE_FILE:
+        if not USB_TRACE_WRITE_FAILED:
+            log("USB transport trace could not be written: trace path is unset")
+            USB_TRACE_WRITE_FAILED = True
+        return
+    record = {
+        "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        ),
+        "monotonic_ns": time.monotonic_ns(),
+        "source": "exporter",
+        "event": event,
+        **fields,
+    }
+    data = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(USB_TRACE_FILE, flags, 0o600)
+        try:
+            if os.write(descriptor, data) != len(data):
+                raise OSError("short trace write")
+        finally:
+            os.close(descriptor)
+    except Exception:
+        if not USB_TRACE_WRITE_FAILED:
+            USB_TRACE_WRITE_FAILED = True
+            try:
+                log("USB transport trace could not be written")
+            except Exception:
+                pass
 
 
 class Stall(Exception):
@@ -160,36 +203,114 @@ class VUSB:
                 raise OSError(errno.EPROTO, f"unexpected vusb response code {code}")
             return data
 
-    async def reset(self, timeout=CTRL_TIMEOUT):
+    async def reset(self, timeout=CTRL_TIMEOUT, *, attempt_id=None):
         deadline = asyncio.get_running_loop().time() + timeout
         while not self.reset_responses.empty():
             self.reset_responses.get_nowait()
         self.reset_pending = True
+        started = time.monotonic_ns()
+        send_count = 0
+        pending_responses = 0
+        usb_trace("usb.reset.begin", attempt_id=attempt_id, timeout_seconds=timeout)
         try:
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
+                    usb_trace(
+                        "usb.reset.timeout",
+                        attempt_id=attempt_id,
+                        send_count=send_count,
+                        pending_responses=pending_responses,
+                        elapsed_ns=time.monotonic_ns() - started,
+                    )
                     raise asyncio.TimeoutError
+                send_count += 1
                 await self.send(0, MSG_RESET)
-                code = await asyncio.wait_for(self.reset_responses.get(), remaining)
+                if send_count == 1:
+                    usb_trace("usb.reset.send", attempt_id=attempt_id, send_count=send_count)
+                try:
+                    code = await asyncio.wait_for(self.reset_responses.get(), remaining)
+                except asyncio.TimeoutError:
+                    usb_trace(
+                        "usb.reset.timeout",
+                        attempt_id=attempt_id,
+                        send_count=send_count,
+                        pending_responses=pending_responses,
+                        elapsed_ns=time.monotonic_ns() - started,
+                    )
+                    raise
                 if code == CODE_RESET:
+                    usb_trace(
+                        "usb.reset.response",
+                        attempt_id=attempt_id,
+                        response="reset",
+                        send_count=send_count,
+                        pending_responses=pending_responses,
+                        elapsed_ns=time.monotonic_ns() - started,
+                    )
                     return
                 if code == CODE_DRIVER_RESET:
+                    usb_trace(
+                        "usb.reset.response",
+                        attempt_id=attempt_id,
+                        response="driver_reset",
+                        send_count=send_count,
+                        pending_responses=pending_responses,
+                        elapsed_ns=time.monotonic_ns() - started,
+                    )
                     raise OSError(errno.ENODEV, "device unplugged (guest driver reset)")
                 if code == CODE_NAK:
+                    pending_responses += 1
+                    if pending_responses == 1:
+                        usb_trace(
+                            "usb.reset.pending",
+                            attempt_id=attempt_id,
+                            response="nak",
+                            send_count=send_count,
+                        )
                     await asyncio.sleep(0.001)
         finally:
             self.reset_pending = False
 
-    async def control(self, setup, out_data=b""):
+    async def control(self, setup, out_data=b"", *, trace_attempt=None, descriptor=None):
         if len(setup) != 8:
             raise ValueError("USB SETUP packet must be 8 bytes")
+        started = time.monotonic_ns()
+        trace_control = trace_attempt is not None and descriptor is not None
+        if trace_control:
+            usb_trace(
+                "usb.control.begin",
+                attempt_id=trace_attempt,
+                descriptor=descriptor,
+            )
         async with self.ctrl_lock:
             async def retry():
                 await self.send(0, MSG_DATA, setup + out_data)
 
-            await retry()
-            return await self._next(self.ctrl, CTRL_TIMEOUT, retry)
+            try:
+                await retry()
+                result = await self._next(self.ctrl, CTRL_TIMEOUT, retry)
+            except Exception as error:
+                if trace_control:
+                    usb_trace(
+                        "usb.control.complete",
+                        attempt_id=trace_attempt,
+                        descriptor=descriptor,
+                        result="error",
+                        error_type=type(error).__name__,
+                        elapsed_ns=time.monotonic_ns() - started,
+                    )
+                raise
+            if trace_control:
+                usb_trace(
+                    "usb.control.complete",
+                    attempt_id=trace_attempt,
+                    descriptor=descriptor,
+                    result="ok",
+                    response_length=len(result),
+                    elapsed_ns=time.monotonic_ns() - started,
+                )
+            return result
 
     async def transfer(self, ep, direction_in, payload=b"", max_length=None):
         address = ep | (0x80 if direction_in else 0)
@@ -286,42 +407,78 @@ class USBIPBridge:
         self.urb_locks = collections.defaultdict(asyncio.Lock)
         self.pending = {}
         self.clients = set()
+        self.stage_id = 0
+        self.discover_attempt = 0
+        self.attempt_id = None
+        self.last_devlist_state = object()
 
     def interface_records(self):
         return b"".join(bytes((i[0], i[1], i[2], 0)) for i in self.interfaces)
 
     async def discover(self, reset_timeout=CTRL_TIMEOUT):
         """Read the descriptors needed by OP_REP_DEVLIST and OP_REP_IMPORT."""
-        await self.usb.reset(reset_timeout)
+        self.discover_attempt += 1
+        attempt_id = f"s{self.stage_id}-a{self.discover_attempt}"
+        self.attempt_id = attempt_id
+        started = time.monotonic_ns()
+        usb_trace("usb.discover.begin", stage_id=self.stage_id, attempt_id=attempt_id)
         setup = lambda value, length: struct.pack("<BBHHH", 0x80, 6, value, 0, length)
-        device = await self.usb.control(setup(0x0100, 18))
-        device = device[:18]
-        config_head = await self.usb.control(setup(0x0200, 9))
-        if len(config_head) < 9:
-            raise ValueError("short USB configuration descriptor")
-        total = int.from_bytes(config_head[2:4], "little")
-        if not 9 <= total <= 4096:
-            raise ValueError(f"invalid USB configuration length {total}")
-        config = await self.usb.control(setup(0x0200, total))
-        if len(config) < total:
-            raise ValueError(f"short USB configuration: got {len(config)}, expected {total}")
-        self.device_record, self.interfaces, self.endpoint_sizes = get_device_record(
-            device, config[:total])
-        self.pid = int.from_bytes(device[10:12], "little")
-        # Both the RestoreOS (12ac) and the SSH ramdisk (12a8) use
-        # AppleUSBDeviceMux with 32 KiB buffers: one whole mux packet per USB
-        # transfer.  Only the DFU/recovery MMIO controller needs splitting.
-        self.pci_stage = self.pid in (0x12ac, 0x12a8)
-        log("USB device discovered: %04x:%04x, %d interface(s)" % (
-            int.from_bytes(device[8:10], "little"),
-            self.pid, len(self.interfaces)))
-        if DEBUG:
-            interfaces = ", ".join("%02x/%02x/%02x" % tuple(i)
-                                    for i in self.interfaces)
-            endpoints = ", ".join("%02x:%d" % item
-                                   for item in sorted(self.endpoint_sizes.items()))
-            log(f"USB interfaces: {interfaces}; endpoints: {endpoints}")
-            log(f"USB configuration descriptor: {config[:total].hex()}")
+        try:
+            await self.usb.reset(reset_timeout, attempt_id=attempt_id)
+            device = await self.usb.control(
+                setup(0x0100, 18), trace_attempt=attempt_id, descriptor="device"
+            )
+            device = device[:18]
+            config_head = await self.usb.control(
+                setup(0x0200, 9), trace_attempt=attempt_id, descriptor="config_header"
+            )
+            if len(config_head) < 9:
+                raise ValueError("short USB configuration descriptor")
+            total = int.from_bytes(config_head[2:4], "little")
+            if not 9 <= total <= 4096:
+                raise ValueError(f"invalid USB configuration length {total}")
+            config = await self.usb.control(
+                setup(0x0200, total), trace_attempt=attempt_id, descriptor="config_full"
+            )
+            if len(config) < total:
+                raise ValueError(f"short USB configuration: got {len(config)}, expected {total}")
+            self.device_record, self.interfaces, self.endpoint_sizes = get_device_record(
+                device, config[:total]
+            )
+            vendor_id = int.from_bytes(device[8:10], "little")
+            self.pid = int.from_bytes(device[10:12], "little")
+            # Both the RestoreOS (12ac) and the SSH ramdisk (12a8) use
+            # AppleUSBDeviceMux with 32 KiB buffers: one whole mux packet per
+            # USB transfer.  Only the DFU/recovery MMIO controller needs splitting.
+            self.pci_stage = self.pid in (0x12ac, 0x12a8)
+            log("USB device discovered: %04x:%04x, %d interface(s)" % (
+                vendor_id, self.pid, len(self.interfaces)
+            ))
+            if DEBUG:
+                interfaces = ", ".join("%02x/%02x/%02x" % tuple(i)
+                                        for i in self.interfaces)
+                endpoints = ", ".join("%02x:%d" % item
+                                       for item in sorted(self.endpoint_sizes.items()))
+                log(f"USB interfaces: {interfaces}; endpoints: {endpoints}")
+                log(f"USB configuration descriptor: {config[:total].hex()}")
+            usb_trace(
+                "usb.discover.complete",
+                stage_id=self.stage_id,
+                attempt_id=attempt_id,
+                vendor_id=f"{vendor_id:04x}",
+                product_id=f"{self.pid:04x}",
+                interface_count=len(self.interfaces),
+                elapsed_ns=time.monotonic_ns() - started,
+            )
+        except Exception as error:
+            usb_trace(
+                "usb.discover.failed",
+                stage_id=self.stage_id,
+                attempt_id=attempt_id,
+                error_type=type(error).__name__,
+                elapsed_ns=time.monotonic_ns() - started,
+            )
+            raise
 
     async def write(self, writer, data):
         async with self.write_lock:
@@ -332,6 +489,16 @@ class USBIPBridge:
         await self.write(writer, struct.pack("!HHI", USBIP_VERSION, code, status))
 
     async def handle_devlist(self, writer):
+        state = (0, None) if self.device_record is None else (1, self.pid)
+        if state != self.last_devlist_state:
+            self.last_devlist_state = state
+            usb_trace(
+                "usbip.devlist_state",
+                stage_id=self.stage_id,
+                attempt_id=self.attempt_id,
+                device_count=state[0],
+                product_id=f"{state[1]:04x}" if state[1] is not None else None,
+            )
         await self.send_op_header(writer, OP_REP_DEVLIST)
         if self.device_record is None:  # between boot stages: nothing to attach yet
             await self.write(writer, struct.pack("!I", 0))
@@ -343,15 +510,35 @@ class USBIPBridge:
     async def handle_import(self, reader, writer):
         busid = (await reader.readexactly(32)).split(b"\0", 1)[0]
         # One client at a time: a second import would share the device's endpoints.
-        if busid != BUSID or self.device_record is None or self.clients:
+        reason = (
+            "wrong_busid" if busid != BUSID else
+            "device_unavailable" if self.device_record is None else
+            "client_busy" if self.clients else None
+        )
+        if reason:
             await self.send_op_header(writer, OP_REP_IMPORT, 1)
+            usb_trace(
+                "usbip.import_result",
+                stage_id=self.stage_id,
+                attempt_id=self.attempt_id,
+                result="refused",
+                reason=reason,
+            )
             return False
         await self.send_op_header(writer, OP_REP_IMPORT)
         await self.write(writer, self.device_record)
+        usb_trace(
+            "usbip.import_result",
+            stage_id=self.stage_id,
+            attempt_id=self.attempt_id,
+            result="accepted",
+            product_id=f"{self.pid:04x}" if self.pid is not None else None,
+        )
         return True
 
     async def handle_connection(self, reader, writer):
         tasks = set()
+        imported = False
         try:
             header = await reader.readexactly(8)
             version, code, status = struct.unpack("!HHI", header)
@@ -364,6 +551,7 @@ class USBIPBridge:
                 if not await self.handle_import(reader, writer):
                     return
                 self.clients.add(writer)
+                imported = True
             else:
                 raise ValueError(f"unsupported USB/IP operation {code:#x}")
 
@@ -391,6 +579,13 @@ class USBIPBridge:
         except Exception as e:
             log(f"USB/IP client error: {e}")
         finally:
+            if imported:
+                usb_trace(
+                    "usbip.disconnect",
+                    stage_id=self.stage_id,
+                    attempt_id=self.attempt_id,
+                    client_count=max(0, len(self.clients) - 1),
+                )
             self.clients.discard(writer)
             for task in tasks:
                 task.cancel()
@@ -524,6 +719,7 @@ class USBIPBridge:
         while True:
             await self.usb.detached.wait()
             self.usb.detached.clear()
+            self.stage_id += 1
             self.device_record = None
             for writer in list(self.clients):
                 writer.close()
