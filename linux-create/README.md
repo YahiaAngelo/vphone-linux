@@ -29,3 +29,24 @@ existing vphone-cli checkout.
 
 Re-run `build.sh` after changing anything in `overlay/`, `edits/` or `excludes/`, or after moving
 the vphone-cli checkout to another tag.
+
+Linux CFW connections use the selected bundle's `config.plist` machine identifier to set
+`VPHONE_ECID` for each SSHFS connection. A missing identity or a conflicting `VPHONE_ECID`
+override is refused before any volume is mounted. This requires the connector's strict ECID
+selection: it must reject an absent or ambiguous match rather than try another attached device.
+`VPHONE_GUEST_SYSTEM`, `VPHONE_GUEST_XART`, and `VPHONE_GUEST_PREBOOT` select absolute guest
+mount paths, passed as literal arguments. Askpass helpers are private to each run.
+
+Guest-free transport checks need Swift 6.4.1, Python 3.12 or later with `uv`, OpenSSH,
+and the FUSE 3 userspace library:
+
+```sh
+uv run linux-create/tests/test_guest_connection.py  # SWIFTC may select a compiler by absolute path
+uv run linux-create/tests/test_ssh_wrappers.py
+```
+
+These checks compile the installer's connection helper and run the wrappers against local
+stubs. The copied SSHFS wrapper substitutes only its absolute SSH executable with an owned
+stub; the production wrapper keeps `/usr/bin/ssh`. The connection check also passes a literal
+connector path through the real FUSE option parser and OpenSSH to a local stub that exits
+without network or USB access. These checks do not create mounts or verify a guest installation.
