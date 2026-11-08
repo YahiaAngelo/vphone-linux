@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '**.py', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -47,6 +47,8 @@ jobs:
             shellcheck -x --severity=warning "$f" || status=1
           done
           exit "$status"
+      - name: Window VSOCK portability tests
+        run: python3 -m unittest discover -s tools/window -p 'test_vsock.py' -v
 
   data:
     name: compatibility data
