@@ -233,6 +233,18 @@ Follow [CREATE-ON-LINUX.md](CREATE-ON-LINUX.md). In short, it:
 It takes about an hour plus the downloads, and asks for sudo a few times. You end up with
 `vms/myphone`, already at the lock screen; continue with step 5.
 
+The firmware cache defaults to `~/.cache/vphone`. To keep the large restore images
+on another filesystem, set `VSETUP_CACHE` to that directory before running
+`setup/create-vm.sh`. The creation preflight checks free space on both `VSETUP_CACHE` and
+`VSETUP_DEVICES`, so each can live on a different filesystem. For example:
+
+```sh
+VSETUP_CACHE=/mnt/large-disk/vphone-cache ./setup/create-vm.sh
+```
+
+Paths with spaces are supported. GPU-driver lookup also searches this cache;
+automatic extraction continues to write the driver under `VSETUP_RELEASE`.
+
 ## 5. Start it
 
 **NVIDIA only, after every reboot:** lock the GPU clocks. Otherwise the GPU stays at idle speed and

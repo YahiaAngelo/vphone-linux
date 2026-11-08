@@ -142,7 +142,7 @@ VC=$VSETUP_SRC/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cl
 QEMU_RUN=$VSETUP_SRC/run-vphone.sh
 T=$VSETUP_SRC/tools
 ECID=$(cat "$VM/ecid" 2>/dev/null || echo 0x0)
-CACHE=$HOME/.cache/vphone
+CACHE=$VSETUP_CACHE
 
 do_sanity() {
   if [ "$DRY" = 1 ]; then
@@ -153,18 +153,9 @@ do_sanity() {
     [ -e "$one" ] || { warn "missing: $one — run ./setup.sh first"; missing=1; }
   done
   [ "$missing" = 0 ] || return 1
-  # The VM grows to 20-25 GB, the firmware takes ~11 GB in ~/.cache/vphone and the restore
-  # tree ~15 GB more while the VM is made: about 60 GB in all.
-  local dir free
-  for dir in "$VSETUP_DEVICES" "$HOME/.cache"; do
-    mkdir -p "$dir"
-    free=$(df -P -BG "$dir" | awk 'NR == 2 { sub(/G$/, "", $4); print $4 }')
-    if [ "${free:-0}" -lt 25 ]; then
-      die "only ${free} GB free under $dir: making a VM needs about 60 GB (free some space, or pass --workdir on a larger disk)"
-    elif [ "$free" -lt 60 ]; then
-      warn "only ${free} GB free under $dir: making a VM needs about 60 GB in all"
-    fi
-  done
+  # The VM grows to 20-25 GB, firmware takes ~11 GB in the cache, and the restore tree
+  # needs ~15 GB more while the VM is made: about 60 GB in all.
+  check_vm_disk_space
 }
 
 do_bundle() {
@@ -176,7 +167,7 @@ do_bundle() {
 
 # The firmware the pairing names: the iOS restore and the cloudOS image, resolved by
 # vphone-cli's fw catalog (IPSW_URL=/CLOUDOS_IPSW_URL= override it). Files land in
-# ~/.cache/vphone and are reused. Resolved on every run (prepare needs the paths); a download
+# $VSETUP_CACHE and are reused. Resolved on every run (prepare needs the paths); a download
 # happens only for a file that is not there yet.
 resolve_firmware() {
   IOS_LOCAL='' CLOUDOS_LOCAL='' IOS_SIZE='' CLOUD_SIZE=''

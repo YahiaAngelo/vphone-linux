@@ -2,7 +2,8 @@
 
 The two-step Linux setup, part of this checkout: **build everything, then pick a device and an iOS
 version and create the VM.** The scripts build THIS checkout (VSETUP_SRC defaults to the repo root)
-and keep all state in `~/vphone-setup-work/` plus one directory per VM.
+and keep build/release state in `~/vphone-setup-work/`, firmware in `~/.cache/vphone`, and each VM
+in its own directory.
 
 ```sh
 # from the repo root:
@@ -99,6 +100,7 @@ macOS instructions instead of pretending they work on Linux alone.
 | `--cid N` | the VM's vsock CID (default 3; pick another next to a running VM) |
 | `GPU_DRIVER_BUNDLE=` | path to `AppleParavirtGPUMetalIOGPUFamily.bundle` |
 | `IPSW_URL=`, `CLOUDOS_IPSW_URL=` | restore-image URLs instead of local files |
+| `VSETUP_CACHE=` | firmware cache and GPU-driver lookup directory (default `~/.cache/vphone`); set it to use a filesystem with more space |
 
 Pairings labeled **TESTED-ON-LINUX** in `--list` are fully supported here
 (today: iPhone17,3 + iOS 26.6.2 and 27.0.1, iPhone19,4 + iOS 27.1); everything else is

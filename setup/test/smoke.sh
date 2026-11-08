@@ -22,6 +22,7 @@ VSETUP_SRC=/tmp/vs-src VSETUP_RELEASE=/tmp/vs-rel VSETUP_DEVICES=/tmp/vs-dev \
   ./create-vm.sh --dry-run -y --device 'iPhone17,3' --ios 26.6.2 --name ci-smoke \
   > /tmp/vs-smoke.log 2>&1 || status=1
 grep -q 'dry-run' /tmp/vs-smoke.log || { echo 'FAIL: no dry-run output'; status=1; }
+bash "$VSETUP_ROOT/test/cache-path.sh" || status=1
 
 if grep -nE '(^|[^[:alnum:]_])(pkill|killall|fuser -k)' setup.sh create-vm.sh lib/common.sh; then
   echo 'FAIL: kill commands are not allowed in setup scripts'; status=1

@@ -54,12 +54,14 @@ guest. `run-vphone.sh` picks lavapipe on WSL and keeps it to 4 threads (`LP_NUM_
 ## IPSWs you already have on a Windows drive
 
 `create-vm.sh` reuses files in `~/.cache/vphone`, by the catalog's file names. Copy them there
-rather than downloading again:
+rather than downloading again. To use another Linux filesystem, set `VSETUP_CACHE` to the desired
+directory; the creation preflight checks that directory's free space.
 
 ```sh
-mkdir -p ~/.cache/vphone
+export VSETUP_CACHE="${VSETUP_CACHE:-$HOME/.cache/vphone}"
+mkdir -p "$VSETUP_CACHE"
 cp "/mnt/h/vphone-linux/ipsws/iPhone17,3_26.6.2_23G90_Restore.ipsw" \
-   /mnt/h/vphone-linux/firmware/cloudOS-26.4-23E5207q.ipsw ~/.cache/vphone/
+   /mnt/h/vphone-linux/firmware/cloudOS-26.4-23E5207q.ipsw "$VSETUP_CACHE/"
 ```
 
 A drive that was attached after WSL started (or a USB/network drive) may not be under `/mnt`
