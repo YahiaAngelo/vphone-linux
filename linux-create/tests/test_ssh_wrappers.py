@@ -73,6 +73,7 @@ class SSHWrapperTests(unittest.TestCase):
                                  "CAPTURE": str(self.capture), "TMPDIR": str(self.tmp),
                                  "VPHONE_ECID": "0000000000001234"}
         self.env.pop("SSH_ASKPASS", None)
+        self.env.pop("VPHONE_SSH_ASKPASS", None)
 
     def executable(self, name, source):
         path = self.bin / name
@@ -112,11 +113,23 @@ class SSHWrapperTests(unittest.TestCase):
         self.assertEqual(helper.parent.parent, self.tmp)
         self.assertFalse(helper.parent.exists())
 
+    def test_ramdisk_ignores_a_desktop_askpass(self):
+        # Fedora's openssh-askpass and KDE export SSH_ASKPASS system-wide; it would prompt on
+        # screen instead of logging in to the ramdisk.
+        desktop = self.tmp / "ksshaskpass"
+        desktop.write_text("#!/bin/sh\nprintf 'desktop\\n'\n")
+        desktop.chmod(0o700)
+        result = self.run_wrapper("ssh-ramdisk.sh", "id", SSH_ASKPASS=str(desktop))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = self.record()
+        self.assertEqual(record["password"], "alpine\n")
+        self.assertNotEqual(record["askpass"], str(desktop))
+
     def test_ramdisk_retains_explicit_per_run_helper_and_child_failure(self):
         helper = self.tmp / "bound-helper"
         helper.write_text("#!/bin/sh\nprintf 'bound\\n'\n")
         helper.chmod(0o700)
-        result = self.run_wrapper("ssh-ramdisk.sh", "sync", SSH_ASKPASS=str(helper), SSH_STATUS="19")
+        result = self.run_wrapper("ssh-ramdisk.sh", "sync", VPHONE_SSH_ASKPASS=str(helper), SSH_STATUS="19")
         self.assertEqual(result.returncode, 19, result.stderr)
         record = self.record()
         self.assertEqual(record["password"], "bound\n")
@@ -124,7 +137,7 @@ class SSHWrapperTests(unittest.TestCase):
         self.assertTrue(helper.is_file())
 
     def test_ramdisk_rejects_unavailable_explicit_helper_before_ssh(self):
-        result = self.run_wrapper("ssh-ramdisk.sh", "sync", SSH_ASKPASS=str(self.tmp / "missing"))
+        result = self.run_wrapper("ssh-ramdisk.sh", "sync", VPHONE_SSH_ASKPASS=str(self.tmp / "missing"))
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.capture.exists())
 
