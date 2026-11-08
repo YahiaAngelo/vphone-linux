@@ -22,7 +22,7 @@ run_case() {
   (
     export VM="$directory/VM with spaces" QEMU_RUN="$temporary/fake launcher.sh"
     export QEMU_PIDFILE="$VM/.qemu.pid" ARG_LOG="$directory/arguments"
-    export GFX=1 WINDOW=0 CID=41
+    export GFX=1 WINDOW=0 CID=41 VPHONE_FIRST_BOOT_TIMEOUT=600
     unset VPHONE_FIRST_BOOT_QMP
     [ -z "$socket" ] || export VPHONE_FIRST_BOOT_QMP=$socket
     log() { :; }
