@@ -4,7 +4,20 @@
 # VPHONE_SSHRD_BOOTSTRAP. It undergoes the same code-signature validation.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
-OUT=${1:?usage: build.sh OUT|--check}
+OUT=${1:?usage: build.sh OUT|--check|--mode}
+case ${VPHONE_SSHRD_BOOTSTRAP_BUILD:-0} in
+    0) MODE=stock ;;
+    1) MODE=source ;;
+    *) echo "VPHONE_SSHRD_BOOTSTRAP_BUILD must be 0 or 1" >&2; exit 1 ;;
+esac
+if [ -n "${VPHONE_SSHRD_BOOTSTRAP:-}" ]; then
+    [ "$MODE" != source ] || { echo "choose VPHONE_SSHRD_BOOTSTRAP or VPHONE_SSHRD_BOOTSTRAP_BUILD=1, not both" >&2; exit 1; }
+    MODE=prebuilt
+fi
+if [ "$OUT" = --mode ]; then
+    printf '%s\n' "$MODE"
+    exit 0
+fi
 BUNDLE=${DARWIN_SDK_BUNDLE:-$HOME/.swiftpm/swift-sdks/darwin.artifactbundle}
 SDK=${SDKROOT:-$BUNDLE/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk}
 CC=${CC:-clang}

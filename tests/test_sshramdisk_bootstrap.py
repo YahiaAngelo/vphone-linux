@@ -9,6 +9,8 @@ import hashlib
 import importlib.util
 import os
 import plistlib
+import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -235,6 +237,7 @@ class BootstrapArtifactTests(unittest.TestCase):
                 "LD64_LLD": "false",
                 "RCODESIGN": "false",
                 "SDKROOT": str(root),
+                "VPHONE_SSHRD_BOOTSTRAP_BUILD": "1",
             }
             environment.pop("VPHONE_SSHRD_BOOTSTRAP", None)
             result = subprocess.run(
@@ -247,6 +250,203 @@ class BootstrapArtifactTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((root / "stage").exists())
             self.assertEqual(list(root.glob(".sshrd-stage.*")), [])
+
+
+class BootstrapSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.environment = dict(os.environ)
+        for key in (
+            "VPHONE_ECID",
+            "VPHONE_SSHRD_BOOTSTRAP",
+            "VPHONE_SSHRD_BOOTSTRAP_BUILD",
+        ):
+            self.environment.pop(key, None)
+        self.environment.update(
+            CC="missing-bootstrap-compiler", SDKROOT=str(self.root / "absent-sdk")
+        )
+
+    def test_default_cached_stage_keeps_stock_bootstrap_without_sdk(self):
+        tree = self.root / "stage/usr/local/bin"
+        tree.mkdir(parents=True)
+        (tree / "dropbear").write_bytes(b"existing Dropbear")
+        (tree / "restored_external").write_bytes(b"stock bootstrap")
+        result = subprocess.run(
+            [
+                str(ROOT / "tools/ssh-ramdisk-stage.sh"),
+                "--bootstrap-only",
+                str(self.root / "stage"),
+            ],
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((tree / "restored_external").read_bytes(), b"stock bootstrap")
+        self.assertEqual(list(self.root.glob(".sshrd-stage.*")), [])
+
+    def test_invalid_rebuild_mode_fails_before_cache_preparation(self):
+        tools = self.root / "tools"
+        (tools / "sshramdisk-bootstrap").mkdir(parents=True)
+        script = tools / "ssh-ramdisk-rebuild-signed.sh"
+        shutil.copy2(ROOT / "tools/ssh-ramdisk-rebuild-signed.sh", script)
+        shutil.copy2(
+            ROOT / "tools/sshramdisk-bootstrap/build.sh",
+            tools / "sshramdisk-bootstrap/build.sh",
+        )
+        for requested, expected in (
+            ({"VPHONE_SSHRD_BOOTSTRAP_BUILD": "invalid"}, "must be 0 or 1"),
+            (
+                {
+                    "VPHONE_SSHRD_BOOTSTRAP_BUILD": "1",
+                    "VPHONE_SSHRD_BOOTSTRAP": "/unused/prebuilt",
+                },
+                "not both",
+            ),
+        ):
+            with self.subTest(requested=requested):
+                result = subprocess.run(
+                    ["bash", str(script), str(self.root / "library"), "unused-vm"],
+                    env={**self.environment, **requested},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse((self.root / "runs").exists())
+
+    def run_setup(
+        self,
+        *,
+        ecid="0x000000000000cafe",
+        selector=None,
+        prebuilt=False,
+        build=None,
+        skip_sanity=False,
+    ):
+        vm = self.root / "vm"
+        vm.mkdir(exist_ok=True)
+        if ecid is not None:
+            (vm / "ecid").write_text(ecid + "\n")
+        source = self.root / "source"
+        for name in ("OpenAVB/OpenAVB.bin", "OpenSEP/OpenSEP.bin", "cli", "run"):
+            path = source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        environment = {
+            **self.environment,
+            "VM": str(vm),
+            "T": str(ROOT / "tools"),
+            "VSETUP_SRC": str(source),
+            "VC": str(source / "cli"),
+            "QEMU_RUN": str(source / "run"),
+            "ARG_LOG": str(self.root / "firmware-ecid"),
+        }
+        if selector is not None:
+            environment["VPHONE_ECID"] = selector
+        if prebuilt:
+            binary = self.root / "prebuilt"
+            binary.write_bytes(signed_fixture())
+            environment["VPHONE_SSHRD_BOOTSTRAP"] = str(binary)
+        if build is not None:
+            environment["VPHONE_SSHRD_BOOTSTRAP_BUILD"] = build
+        if skip_sanity:
+            environment["SKIP_SANITY"] = "1"
+        production = (ROOT / "setup/create-vm.sh").read_text()
+        functions = []
+        for name in ("check_sshrd_bootstrap", "do_sanity", "bind_vm_ecid"):
+            match = re.search(
+                rf"^{name}\(\) \{{\n.*?^\}}$", production, re.MULTILINE | re.DOTALL
+            )
+            if match:
+                functions.append(match[0])
+        stages = re.search(
+            r"^step sanity   do_sanity\n.*?^step gpu-driver do_gpu_driver$",
+            production,
+            re.MULTILINE | re.DOTALL,
+        )[0]
+        script = (
+            """set -euo pipefail
+DRY=0
+die() { printf '%s\\n' "$*" >&2; exit 1; }
+warn() { printf '%s\\n' "$*" >&2; }
+check_vm_disk_space() { :; }
+step() { if [ "$1" = sanity ] && [ "${SKIP_SANITY:-0}" = 1 ]; then return 0; fi; shift; "$@"; }
+do_bundle() { ECID=$(cat "$VM/ecid" 2>/dev/null || true); }
+do_firmware() { printf '%s\\n' "${VPHONE_ECID-__UNSET__}" > "$ARG_LOG"; }
+do_gpu_driver() { :; }
+"""
+            + "\n".join(functions)
+            + "\n"
+            + stages
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_default_setup_needs_no_sdk_or_ecid_selector(self):
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "firmware-ecid").read_text(), "__UNSET__\n")
+
+    def test_valid_prebuilt_binds_equivalent_explicit_ecid(self):
+        for selector in (None, "0xCAFE"):
+            with self.subTest(selector=selector):
+                result = self.run_setup(prebuilt=True, selector=selector)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    (self.root / "firmware-ecid").read_text(), "0x000000000000cafe\n"
+                )
+
+    def test_requested_source_build_fails_before_firmware_without_compiler(self):
+        for skip_sanity in (False, True):
+            with self.subTest(skip_sanity=skip_sanity):
+                result = self.run_setup(build="1", skip_sanity=skip_sanity)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "missing bootstrap build tool: missing-bootstrap-compiler",
+                    result.stderr,
+                )
+                self.assertFalse((self.root / "firmware-ecid").exists())
+
+    def test_explicit_ecid_requires_an_ecid_aware_bootstrap(self):
+        result = self.run_setup(selector="0xCAFE")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("VPHONE_ECID requires", result.stderr)
+        self.assertFalse((self.root / "firmware-ecid").exists())
+
+    def test_missing_bundle_ecid_fails_before_firmware(self):
+        result = self.run_setup(ecid=None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing ECID in VM bundle:", result.stderr)
+        self.assertFalse((self.root / "firmware-ecid").exists())
+
+    def test_zero_bundle_ecid_fails_before_firmware(self):
+        result = self.run_setup(ecid="0x0000")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("zero ECID in VM bundle:", result.stderr)
+        self.assertFalse((self.root / "firmware-ecid").exists())
+
+    def test_conflicting_or_empty_explicit_ecid_is_not_replaced(self):
+        for selector in ("0xdead", ""):
+            with self.subTest(selector=selector):
+                result = self.run_setup(prebuilt=True, selector=selector)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.root / "firmware-ecid").exists())
+
+    def test_conflicting_bootstrap_modes_fail_before_firmware(self):
+        result = self.run_setup(prebuilt=True, build="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not both", result.stderr)
+        self.assertFalse((self.root / "firmware-ecid").exists())
 
 
 if __name__ == "__main__":

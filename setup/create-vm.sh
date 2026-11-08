@@ -149,8 +149,19 @@ log "VM:      $VM   (scale ${SCALE}x, vsock CID $CID)"
 VC=$VSETUP_SRC/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli
 QEMU_RUN=$VSETUP_SRC/run-vphone.sh
 T=$VSETUP_SRC/tools
-ECID=$(cat "$VM/ecid" 2>/dev/null || echo 0x0)
+ECID=$(cat "$VM/ecid" 2>/dev/null || true)
 CACHE=$VSETUP_CACHE
+
+check_sshrd_bootstrap() {
+  SSHRD_BOOTSTRAP_MODE=$("$T/sshramdisk-bootstrap/build.sh" --mode)
+  if [ "$SSHRD_BOOTSTRAP_MODE" = prebuilt ]; then
+    python3 "$T/sshramdisk-bootstrap/check.py" "$VPHONE_SSHRD_BOOTSTRAP"
+  elif [ "$SSHRD_BOOTSTRAP_MODE" = source ]; then
+    "$T/sshramdisk-bootstrap/build.sh" --check
+  elif [ "${VPHONE_ECID+x}" = x ]; then
+    die "VPHONE_ECID requires VPHONE_SSHRD_BOOTSTRAP or VPHONE_SSHRD_BOOTSTRAP_BUILD=1 during VM creation"
+  fi
+}
 
 do_sanity() {
   if [ "$DRY" = 1 ]; then
@@ -162,11 +173,7 @@ do_sanity() {
   done
   [ "$missing" = 0 ] || return 1
   # Check before downloading firmware or restoring a VM, rather than at CFW.
-  if [ -n "${VPHONE_SSHRD_BOOTSTRAP:-}" ]; then
-    python3 "$T/sshramdisk-bootstrap/check.py" "$VPHONE_SSHRD_BOOTSTRAP"
-  else
-    "$T/sshramdisk-bootstrap/build.sh" --check
-  fi
+  check_sshrd_bootstrap
   # The VM grows to 20-25 GB, firmware takes ~11 GB in the cache, and the restore tree
   # needs ~15 GB more while the VM is made: about 60 GB in all.
   check_vm_disk_space
@@ -191,7 +198,33 @@ do_bundle() {
   dry python3 "$VSETUP_ROOT/lib/make-bundle.py" "$VM" "$DEVICE" "$SCALE"
   dry cp "$VSETUP_SRC/OpenAVB/OpenAVB.bin" "$VM/OpenAVB.bin"
   dry cp "$VSETUP_SRC/OpenSEP/OpenSEP.bin" "$VM/OpenSEP.bin"
-  ECID=$(cat "$VM/ecid" 2>/dev/null || echo 0x0)
+  ECID=$(cat "$VM/ecid" 2>/dev/null || true)
+}
+
+# Bind only the explicitly selected ECID-aware bootstrap. Stock staging retains
+# its legacy serial and does not gain a Darwin SDK dependency.
+bind_vm_ecid() {
+  [ "$DRY" = 1 ] && return 0
+  [ -s "$VM/ecid" ] || die "missing ECID in VM bundle: $VM/ecid"
+  ECID=$(cat "$VM/ecid")
+  local selected requested
+  selected=${ECID,,}
+  selected=${selected#0x}
+  [[ "$selected" =~ ^[[:xdigit:]]{1,16}$ ]] || die "invalid ECID in VM bundle: $ECID"
+  while [[ ${#selected} -gt 1 && ${selected:0:1} == 0 ]]; do selected=${selected:1}; done
+  [ "$selected" != 0 ] || die "zero ECID in VM bundle: $VM/ecid"
+  if [ "${VPHONE_ECID+x}" = x ]; then
+    requested=${VPHONE_ECID,,}
+    requested=${requested#0x}
+    [[ "$requested" =~ ^[[:xdigit:]]{1,16}$ ]] || die "VPHONE_ECID must be 1-16 hexadecimal digits, optionally prefixed with 0x"
+    while [[ ${#requested} -gt 1 && ${requested:0:1} == 0 ]]; do requested=${requested:1}; done
+    [ "$requested" = "$selected" ] || die "VPHONE_ECID does not match the selected VM bundle"
+  fi
+  # A resumed run can have recorded sanity checks from a different bootstrap mode.
+  check_sshrd_bootstrap
+  if [ "$SSHRD_BOOTSTRAP_MODE" != stock ]; then
+    export VPHONE_ECID=$ECID
+  fi
 }
 
 # The firmware the pairing names: the iOS restore and the cloudOS image, resolved by
@@ -443,6 +476,7 @@ do_cfw() {
 
 step sanity   do_sanity
 step bundle   do_bundle
+bind_vm_ecid
 step firmware do_firmware
 step gpu-driver do_gpu_driver
 step prepare  do_prepare
