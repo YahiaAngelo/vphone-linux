@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  staged-cache:
+    name: staged cache publication and recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: swift:6.4.1-noble@sha256:6304481cf2717966b7ba175162e397ea2f2cc3161909f2b2a5cf40036079a0f7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Lakr233/vphone-cli
+          ref: 83197152137ddd2aad70eb121d6b88a9afbee36e # 2.14.2
+          path: _ci/vphone-cli
+      - name: Run production cache transaction and recovery tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd linux-create
+          VPHONE_CLI="$GITHUB_WORKSPACE/_ci/vphone-cli" ./sync-sources.sh
+          ./test-staged-cache.sh
+
   swiftly-private-prefix:
     name: private Swiftly installation
     runs-on: ubuntu-latest
@@ -76,6 +96,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: USB/IP framing and timeout regressions
         run: python3 tools/test_vusb_usbip.py
+      - name: Pending-cache recovery boot preconditions
+        run: python3 tools/test_nvram_autoboot.py
       - name: bash -n (parse every script)
         run: |
           set -e

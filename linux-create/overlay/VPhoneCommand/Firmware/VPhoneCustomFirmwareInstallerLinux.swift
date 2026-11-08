@@ -97,6 +97,7 @@ struct VPhoneLinuxGuestConnection {
         var result = inherited
         result["VPHONE_ECID"] = ecid
         result["SSH_ASKPASS"] = askpass
+        result["VPHONE_SSH_ASKPASS"] = askpass
         result["SSH_ASKPASS_REQUIRE"] = "force"
         result["DISPLAY"] = ":0"
         return result
@@ -121,6 +122,56 @@ struct VPhoneLinuxGuestConnection {
 }
 
 extension VPhoneCustomFirmwareInstaller {
+    func synchronizeLinuxGuest(_ environment: [String: String]) throws {
+        let result = try VPhoneProcessRunner.runCapturing(
+            URL(fileURLWithPath: vphoneLinuxRoot() + "/tools/ssh-ramdisk.sh"), ["sync"], env: environment)
+        guard result.succeeded else {
+            throw ValidationError("Selected guest sync failed (\(result.exitCode)): \(result.stderr)")
+        }
+    }
+
+    func recoverLinuxCache(allowLegacyJournal: Bool) throws {
+        guard geteuid() == 0 else { throw ValidationError("Cache recovery needs root. Run this command with sudo.") }
+        let bundleDirectory = try pinBundle(owner: VPhoneInvokingUser.current?.uid)
+        let device = configuredGuestDevice(in: bundleDirectory) ?? guestDevice(of: nil)
+        guard !device.hasPlainArm64Userland else {
+            throw ValidationError("Linux cache-only recovery cannot restore tvOS's standalone dyld/cache pair. Keep the boot fence and recover both components together.")
+        }
+        let env = ProcessInfo.processInfo.environment
+        let connection = try VPhoneLinuxGuestConnection(
+            bundleConfiguration: bundleDirectory.readData("config.plist"), environment: env)
+        try VPhoneStagedDyldCache.PendingPublication.validateRecoveryTarget(
+            bundleDirectory: bundleDirectory, guestECID: connection.ecid, allowLegacy: allowLegacyJournal)
+        let work = try makeWorkDirectory()
+        defer { try? removeWorkDirectory(work) }
+        let askpass = work.file("ssh-askpass.sh")
+        try work.directory.writeFile("ssh-askpass.sh", contents: Data("#!/bin/sh\necho alpine\n".utf8), mode: 0o700)
+        let environment = connection.environment(env, askpass: askpass.path)
+        let system = work.file("system")
+        _ = try work.directory.directory("system", create: true, mode: 0o700)
+        defer { _ = try? tool("/usr/bin/fusermount3", ["-u", system.path], quiet: true) }
+        try mountRemote(system, guestPath: connection.system, environment: environment)
+        let systemRoot = try work.directory.mountedVolume("system")
+        let relative = "System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
+        let stage = try VPhoneStagedDyldCache.recover(
+            bundleDirectory: bundleDirectory, source: systemRoot.directory(relative), guestECID: connection.ecid,
+            allowLegacyJournal: allowLegacyJournal, synchronizeGuest: {
+                try synchronizeLinuxGuest(environment)
+            })
+        print("[+] Cache rollback and guest sync completed. The interrupted CFW install still needs to be rerun.")
+        let stageURL = URL(fileURLWithPath: try stage.path, isDirectory: true)
+        let oldURL = stageURL.deletingLastPathComponent()
+        guard stageURL.lastPathComponent == "dyld-stage", oldURL.lastPathComponent.hasPrefix("vphone-cfw."),
+              oldURL.path != work.url.path else {
+            throw ValidationError("Cache recovered. Retained recovery artifacts at \(stageURL.path); their work-folder name was not recognized.")
+        }
+        let oldDirectory = try VPhoneConfinedDirectory.pin(absolutePath: oldURL.path, requireOwner: 0)
+        let oldParent = try VPhoneConfinedDirectory.pin(absolutePath: oldURL.deletingLastPathComponent().path, requireOwner: 0)
+        let oldWork = WorkDirectory(name: oldURL.lastPathComponent, url: oldURL, directory: oldDirectory, parent: oldParent)
+        try removeWorkDirectory(oldWork)
+        print("[+] Removed the recovered host stage")
+    }
+
     func runLinuxGuest(
         bundleDirectory: VPhoneConfinedDirectory,
         bundlePath: String,
@@ -128,23 +179,28 @@ extension VPhoneCustomFirmwareInstaller {
         plan: VPhoneVirtualMachinePatchPlan?,
         receipt: VPhoneVirtualMachinePatchReceipt?,
         receiptGuest: Set<String>?,
+        priorFallback: Set<String>,
         receiptKernel: Set<String>?,
         invokingUser: VPhoneInvokingUser?,
         callerUID: uid_t?,
     ) throws {
         _ = bundlePath
         _ = receipt
+        let device = configuredGuestDevice(in: bundleDirectory) ?? guestDevice(of: restore)
+        guard !device.hasPlainArm64Userland else {
+            throw ValidationError("Linux tvOS CFW is blocked until standalone dyld and its cache share a recoverable transaction. No guest volumes were mounted or changed.")
+        }
         let env = ProcessInfo.processInfo.environment
         let connection = try VPhoneLinuxGuestConnection(
             bundleConfiguration: bundleDirectory.readData("config.plist"), environment: env)
         // Refuse an unresolved earlier publication before creating a new work
         // folder, mounting, copying, or invoking any patcher.
-        let pending = try VPhoneStagedDyldCache.PendingPublication(bundleDirectory: bundleDirectory)
+        let pending = try VPhoneStagedDyldCache.PendingPublication(bundleDirectory: bundleDirectory, guestECID: connection.ecid)
         var work = try makeWorkDirectory()
         work.pendingDyldPublication = pending
         let completion = VPhoneStagedDyldCache.Completion()
         defer {
-            if completion.shouldRemoveWork(hasStagedCache: (try? work.directory.exists("dyld-stage")) == true) {
+            if completion.shouldRemoveWork(pending: pending) {
                 try? removeWorkDirectory(work)
             } else {
                 fputs("CFW stopped before boot. Retained local cache recovery stage: \(work.file("dyld-stage").path)\n", stderr)
@@ -154,6 +210,7 @@ extension VPhoneCustomFirmwareInstaller {
         try work.directory.writeFile(
             "ssh-askpass.sh", contents: Data("#!/bin/sh\necho alpine\n".utf8), mode: 0o700)
         let mountEnvironment = connection.environment(env, askpass: askpass.path)
+        work.linuxGuestEnvironment = mountEnvironment
 
         let system = work.file("system")
         let xart = work.file("xart")
@@ -185,10 +242,9 @@ extension VPhoneCustomFirmwareInstaller {
         print("[+] xart volume open")
         let wasInstalled = try systemRoot.exists("System/Library/xpc/launchd.plist.bak")
         print("[*] wasInstalled=\(wasInstalled), mode=\(mode)")
-        let priorGuest = try VPhoneStagedDyldCache.priorGuestPatches(
-            wasInstalled: wasInstalled, receipt: receiptGuest,
+        let priorGuest = VPhoneStagedDyldCache.priorGuestPatches(
+            wasInstalled: wasInstalled, receipt: receiptGuest, priorFallback: priorFallback,
         )
-        let device = configuredGuestDevice(in: bundleDirectory) ?? guestDevice(of: restore)
         var liveGuest = Set<String>()
         switch mode {
         case .kernelUpdate:
@@ -294,7 +350,7 @@ extension VPhoneCustomFirmwareInstaller {
             owner: invokingUser.map { ($0.uid, $0.gid) },
         )
         try completion.recordReceipt(in: bundleDirectory, pending: pending, synchronizeGuest: {
-            _ = try tool(vphoneLinuxRoot() + "/tools/ssh-ramdisk.sh", ["sync"], quiet: true)
+            try synchronizeLinuxGuest(mountEnvironment)
         }) {
             try writeGuestReceipt(
                 live: liveGuest,

@@ -134,6 +134,7 @@ struct VPhoneCustomFirmwareInstaller {
         let parent: VPhoneConfinedDirectory
         #if os(Linux)
         var pendingDyldPublication: VPhoneStagedDyldCache.PendingPublication?
+        var linuxGuestEnvironment: [String: String]?
         #endif
 
         func file(_ name: String) -> URL {
@@ -204,12 +205,10 @@ struct VPhoneCustomFirmwareInstaller {
         // this VM's kernelcache, which decide the shared region size below.
         var receiptKernel = receipt?.parts[VPhoneVirtualMachinePatchReceipt.part(for: .firmware(.kernelcache))]
             .map { Set($0.patches) }
-        #if !os(Linux)
         let guestTargets = FirmwareGuestPatchResolution.guestTargetIdentifiers
         let effectiveEnabled = Set(plan?.enabledPatches ?? [])
         let priorFallback = Set(rawPlan?.enabledPatches ?? []).intersection(guestTargets)
             .union(Set(Self.lateGuestPatches).intersection(effectiveEnabled))
-        #endif
 #if os(Linux)
         // The VM is booted into the SSH ramdisk and its target volumes are
         // mounted in the guest. The host reaches them over sshfs; the host
@@ -225,6 +224,7 @@ struct VPhoneCustomFirmwareInstaller {
                 plan: plan,
                 receipt: receipt,
                 receiptGuest: receiptGuest,
+                priorFallback: priorFallback,
                 receiptKernel: receiptKernel,
                 invokingUser: invokingUser,
                 callerUID: callerUID,
@@ -1551,7 +1551,7 @@ struct VPhoneCustomFirmwareInstaller {
         #if os(Linux)
         // Remote page writes turn a few minutes of host work into hours of
         // SFTP requests. Keep the complete selected family and undo local.
-        guard let pendingPublication = work.pendingDyldPublication else {
+        guard let pendingPublication = work.pendingDyldPublication, let guestEnvironment = work.linuxGuestEnvironment else {
             throw ValidationError("The Linux cache publication guard was not initialized")
         }
         let stagedCache = try VPhoneStagedDyldCache(
@@ -1827,7 +1827,7 @@ struct VPhoneCustomFirmwareInstaller {
             throw ValidationError("Local dyld patching failed; cache publication and setup boot stopped. Recovery stage: \(try stagedCache.directory.path)")
         }
         try stagedCache.publish(validateUndo: validateStagedUndo) {
-            _ = try tool(vphoneLinuxRoot() + "/tools/ssh-ramdisk.sh", ["sync"], quiet: true)
+            try synchronizeLinuxGuest(guestEnvironment)
         }
         #endif
 
@@ -2690,6 +2690,14 @@ struct VPhoneCustomFirmwareInstaller {
                 // are removed as links. Set-ID bits are kept: this is
                 // Apple's content for the guest, the guest volume is
                 // mounted nosuid, and the copy never follows a link.
+                #if os(Linux)
+                if destination == os {
+                    let cache = try source.directory("System/Library/Caches/com.apple.dyld")
+                    let main = DyldSharedCacheChunkSet.mainCacheURL(in: URL(fileURLWithPath: try cache.path))
+                    try VPhoneStagedDyldCache.preflightSpace(source: cache, mainName: main.lastPathComponent,
+                                                           workDirectory: work.directory)
+                }
+                #endif
                 try system.removeItem(destination)
                 try system.copyTree(from: source, to: destination, clearSetID: false)
                 #if os(Linux)
@@ -4411,7 +4419,12 @@ struct VPhoneCustomFirmwareInstaller {
         else {
             throw ValidationError("A CFW volume is still mounted under \(work.url.path). Eject it, then try again.")
         }
-        try VPhoneConfinedDirectory.pin(absolutePath: workParent).removeItem(work.name)
+        let expected = try work.directory.metadata()
+        guard let current = try work.parent.status(work.name), current.st_mode & S_IFMT == S_IFDIR,
+              current.st_dev == expected.st_dev, current.st_ino == expected.st_ino else {
+            throw ValidationError("The CFW work directory changed before cleanup.")
+        }
+        try work.parent.removeItem(work.name)
     }
 
     private func detachImage(at mount: URL, attachment: String = "") throws {

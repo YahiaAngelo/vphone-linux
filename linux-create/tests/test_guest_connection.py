@@ -76,13 +76,14 @@ do {
     def test_bundle_identity_binds_child_environment_and_normalizes_matching_override(self):
         for override in (None, "1234", "0x0000000000001234", "0X1234"):
             with self.subTest(override=override):
-                inherited = {"KEEP": "unchanged", "SSH_ASKPASS": "/tmp/foreign-helper"}
+                inherited = {"KEEP": "unchanged", "SSH_ASKPASS": "/tmp/foreign-helper", "VPHONE_SSH_ASKPASS": "/tmp/foreign-vphone-helper"}
                 if override is not None:
                     inherited["VPHONE_ECID"] = override
                 result = self.connection(environment=inherited)
                 self.assertEqual(result["ecid"], "0000000000001234")
                 self.assertEqual(result["environment"]["VPHONE_ECID"], result["ecid"])
                 self.assertEqual(result["environment"]["SSH_ASKPASS"], "/private/work/ssh-askpass.sh")
+                self.assertEqual(result["environment"]["VPHONE_SSH_ASKPASS"], "/private/work/ssh-askpass.sh")
                 self.assertEqual(result["environment"]["SSH_ASKPASS_REQUIRE"], "force")
                 self.assertEqual(result["environment"]["KEEP"], "unchanged")
 

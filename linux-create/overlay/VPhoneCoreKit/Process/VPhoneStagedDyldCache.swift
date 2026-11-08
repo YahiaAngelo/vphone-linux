@@ -1,5 +1,6 @@
 #if os(Linux)
 import CryptoKit
+import Darwin
 import Foundation
 import Glibc
 
@@ -9,17 +10,10 @@ public final class VPhoneStagedDyldCache {
     public static let undoName = ".vphone-dsc-undo.json"
     public static let pendingName = ".vphone-dsc-pending.json"
 
-    /// A launchd backup proves earlier mutation, not completed publication.
     public static func priorGuestPatches(
-        wasInstalled: Bool, receipt: Set<String>?
-    ) throws -> Set<String> {
-        guard !wasInstalled || receipt != nil else {
-            throw Failure(
-                "Unresolved or legacy CFW state: launchd.plist.bak exists but no valid Guest patch receipt was found. "
-                    + "Preserve the VM disk and retained CFW artifacts for manual inspection; automatic recovery is unavailable."
-            )
-        }
-        return receipt ?? []
+        wasInstalled: Bool, receipt: Set<String>?, priorFallback: Set<String> = []
+    ) -> Set<String> {
+        receipt ?? (wasInstalled ? priorFallback : [])
     }
 
     public struct Failure: Error, CustomStringConvertible {
@@ -34,9 +28,8 @@ public final class VPhoneStagedDyldCache {
         var create: (Int32, String, Int32, mode_t) -> Int32 = { Glibc.openat($0, $1, $2, $3) }
     }
 
-    /// A per-bundle stop marker, not an automatic recovery mechanism. A whole
-    /// chunk can be internally signed while its original bytes have not yet
-    /// reached the undo log; a fresh audit cannot establish retry safety.
+    /// Fence ordinary boot until the complete cache family is durable. The
+    /// retained stage also permits verified rollback through the SSH ramdisk.
     public final class PendingPublication {
         private struct Identity: Codable, Equatable {
             let device: UInt64
@@ -49,54 +42,160 @@ public final class VPhoneStagedDyldCache {
             let bundle: Identity
             let disk: Identity
             let recoveryStage: String
+            let recoveryPlanSHA256: String?
+            let guestECID: String?
         }
 
         private let bundleDirectory: VPhoneConfinedDirectory
         private let bundleIdentity: Identity
         private let diskIdentity: Identity
         private let sync: (Int32) -> Int32
+        private let guestECID: String?
         private var journalIdentity: Identity?
         private var journalBytes: Data?
+        private var journalFile: VPhoneConfinedFile?
+        private var journalCreated = false
+        private var cleared = false
         private var published = false
+        var recoveryStage: String?
+        private var recoveryPlanSHA256: String?
 
-        public convenience init(bundleDirectory: VPhoneConfinedDirectory) throws {
-            try self.init(bundleDirectory: bundleDirectory, sync: { Glibc.fsync($0) })
+        public var retainsRecoveryFiles: Bool { journalCreated && !cleared }
+
+        public convenience init(bundleDirectory: VPhoneConfinedDirectory, guestECID: String? = nil) throws {
+            try self.init(bundleDirectory: bundleDirectory, guestECID: guestECID, sync: { Glibc.fsync($0) })
         }
 
-        init(bundleDirectory: VPhoneConfinedDirectory, sync: @escaping (Int32) -> Int32) throws {
-            if try bundleDirectory.exists(VPhoneStagedDyldCache.pendingName) {
-                let metadata = try bundleDirectory.status(VPhoneStagedDyldCache.pendingName)
-                let journal = metadata.map { $0.st_size <= 65536 && $0.st_mode & S_IFMT == S_IFREG } == true
-                    ? (try? JSONDecoder().decode(Journal.self, from: bundleDirectory.readData(VPhoneStagedDyldCache.pendingName))) : nil
-                throw Failure("Unresolved dyld cache publication in \(try bundleDirectory.path). Recovery stage: \(journal?.recoveryStage ?? "unknown; inspect the pending journal"). Repair the prior publication before booting or retrying CFW.")
-            }
+        init(bundleDirectory: VPhoneConfinedDirectory, guestECID: String? = nil, sync: @escaping (Int32) -> Int32,
+             recovering: Bool = false, allowLegacy: Bool = false) throws {
             self.bundleDirectory = bundleDirectory
             self.sync = sync
+            if let guestECID {
+                guard guestECID.count == 16,
+                      guestECID.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+                      let value = UInt64(guestECID, radix: 16), value != 0 else {
+                    throw Failure("Cache publication requires a normalized selected guest ECID")
+                }
+                self.guestECID = String(format: "%016llX", value)
+            } else {
+                self.guestECID = nil
+            }
             let metadata = try bundleDirectory.metadata()
             bundleIdentity = Identity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino), size: nil)
             let disk = try bundleDirectory.openRegularFile("Disk.img", requireSingleLink: true)
             diskIdentity = Identity(device: UInt64(disk.device), inode: UInt64(disk.inode), size: Int64(disk.size))
+            if try bundleDirectory.exists(VPhoneStagedDyldCache.pendingName) {
+                if recovering {
+                    let file = try bundleDirectory.openRegularFile(VPhoneStagedDyldCache.pendingName, requireSingleLink: true)
+                    guard file.owner == geteuid(), file.mode & 0o777 == 0o600,
+                          file.size > 0, file.size <= 65536 else {
+                        throw Failure("Pending cache journal is not a private regular file owned by this account")
+                    }
+                    guard flock(file.descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                        throw Failure("A cache publisher or recovery process still owns the pending journal")
+                    }
+                    let bytes = try Self.readJournal(file)
+                    let journal = try JSONDecoder().decode(Journal.self, from: bytes)
+                    guard journal.schemaVersion == 2 || (journal.schemaVersion == 1 && allowLegacy) else {
+                        throw Failure("Legacy pending journal: stop the original CFW command, then use cfw recover-cache --legacy-journal")
+                    }
+                    guard journal.schemaVersion == 1 || journal.recoveryPlanSHA256?.count == 64 else {
+                        throw Failure("Pending journal has no complete recovery-plan digest")
+                    }
+                    guard self.guestECID != nil,
+                          journal.schemaVersion == 1 || journal.guestECID == self.guestECID else {
+                        throw Failure("Recovery guest ECID does not match the pending publication; refusing to contact another guest")
+                    }
+                    guard journal.bundle == bundleIdentity, journal.disk == diskIdentity else {
+                        throw Failure("Pending cache journal does not describe this VM bundle and Disk.img")
+                    }
+                    journalFile = file
+                    journalIdentity = Identity(device: UInt64(file.device), inode: UInt64(file.inode), size: Int64(file.size))
+                    journalBytes = bytes
+                    recoveryStage = journal.recoveryStage
+                    recoveryPlanSHA256 = journal.recoveryPlanSHA256
+                    journalCreated = true
+                    try requireOwnership()
+                    return
+                }
+                let metadata = try bundleDirectory.status(VPhoneStagedDyldCache.pendingName)
+                let journal = metadata.map { $0.st_size <= 65536 && $0.st_mode & S_IFMT == S_IFREG } == true
+                    ? (try? JSONDecoder().decode(Journal.self, from: bundleDirectory.readData(VPhoneStagedDyldCache.pendingName))) : nil
+                throw Failure("Unresolved dyld cache publication in \(try bundleDirectory.path). Recovery stage: \(journal?.recoveryStage ?? "unknown; inspect the pending journal"). Boot the SSH ramdisk and run cfw recover-cache before retrying CFW or ordinary boot.")
+            }
+            if recovering { throw Failure("This VM has no pending cache publication to recover") }
         }
 
-        func begin(recoveryStage: String) throws {
+        static func recovering(bundleDirectory: VPhoneConfinedDirectory, guestECID: String, allowLegacy: Bool) throws -> PendingPublication {
+            try PendingPublication(bundleDirectory: bundleDirectory, guestECID: guestECID, sync: { Glibc.fsync($0) },
+                                   recovering: true, allowLegacy: allowLegacy)
+        }
+
+        public static func validateRecoveryTarget(bundleDirectory: VPhoneConfinedDirectory,
+                                                 guestECID: String, allowLegacy: Bool = false) throws {
+            let pending = try recovering(bundleDirectory: bundleDirectory, guestECID: guestECID, allowLegacy: allowLegacy)
+            pending.releasePublicationLock()
+        }
+
+        private static func readJournal(_ file: VPhoneConfinedFile) throws -> Data {
+            var metadata = stat()
+            guard fstat(file.descriptor, &metadata) == 0, metadata.st_size > 0, metadata.st_size <= 65536 else {
+                throw Failure("Pending cache journal is empty or too large")
+            }
+            var data = Data(count: Int(metadata.st_size))
+            try data.withUnsafeMutableBytes { bytes in
+                var offset = 0
+                while offset < bytes.count {
+                    let count = Glibc.pread(file.descriptor, bytes.baseAddress! + offset, bytes.count - offset, off_t(offset))
+                    if count < 0, errno == EINTR { continue }
+                    guard count > 0 else { throw Failure("Could not read the complete pending cache journal") }
+                    offset += count
+                }
+            }
+            guard VPhoneStagedDyldCache.unchanged(file.descriptor, since: metadata) else {
+                throw Failure("Pending cache journal changed while it was being read")
+            }
+            return data
+        }
+
+        func begin(recoveryStage: String, recoveryPlanSHA256: String) throws {
             guard journalIdentity == nil else { throw Failure("Dyld cache publication was already started") }
+            guard let guestECID else { throw Failure("Cache publication requires the selected guest ECID") }
             let bundle = try bundleDirectory.metadata()
             let disk = try bundleDirectory.openRegularFile("Disk.img", requireSingleLink: true)
             guard bundleIdentity == Identity(device: UInt64(bundle.st_dev), inode: UInt64(bundle.st_ino), size: nil),
                   diskIdentity == Identity(device: UInt64(disk.device), inode: UInt64(disk.inode), size: Int64(disk.size))
             else { throw Failure("VM bundle or Disk.img identity changed before cache publication") }
-            let journal = Journal(schemaVersion: 1, bundle: bundleIdentity, disk: diskIdentity, recoveryStage: recoveryStage)
+            let journal = Journal(schemaVersion: 2, bundle: bundleIdentity, disk: diskIdentity,
+                                  recoveryStage: recoveryStage, recoveryPlanSHA256: recoveryPlanSHA256, guestECID: guestECID)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(journal)
-            let file = openat(bundleDirectory.descriptor, VPhoneStagedDyldCache.pendingName,
-                              O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            let temporary = ".vphone-dsc-journal-\(UUID().uuidString)"
+            let file = openat(bundleDirectory.descriptor, temporary,
+                              O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             guard file >= 0 else { throw Failure("Could not exclusively create pending cache journal: \(String(cString: strerror(errno)))") }
-            defer { close(file) }
+            var adopted = false
+            defer {
+                if !journalCreated {
+                    var opened = stat(), named = stat()
+                    if fstat(file, &opened) == 0,
+                       fstatat(bundleDirectory.descriptor, temporary, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                       named.st_dev == opened.st_dev, named.st_ino == opened.st_ino {
+                        unlinkat(bundleDirectory.descriptor, temporary, 0)
+                    }
+                }
+                if !adopted { close(file) }
+            }
             var metadata = stat()
-            guard fstat(file, &metadata) == 0 else { throw Failure("Could not inspect pending cache journal") }
+            guard fchmod(file, 0o600) == 0, fstat(file, &metadata) == 0 else { throw Failure("Could not inspect pending cache journal") }
+            journalFile = VPhoneConfinedFile(descriptor: file, metadata: metadata)
+            adopted = true
+            guard flock(file, LOCK_EX | LOCK_NB) == 0 else { throw Failure("Could not lock the pending cache journal") }
             journalIdentity = Identity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino), size: Int64(data.count))
             journalBytes = data
+            self.recoveryStage = recoveryStage
+            self.recoveryPlanSHA256 = recoveryPlanSHA256
             try data.withUnsafeBytes { bytes in
                 var offset = 0
                 while offset < bytes.count {
@@ -106,12 +205,31 @@ public final class VPhoneStagedDyldCache {
                     offset += count
                 }
             }
-            guard sync(file) == 0, sync(bundleDirectory.descriptor) == 0 else {
+            guard sync(file) == 0 else {
                 throw Failure("Pending cache journal fsync: \(String(cString: strerror(errno)))")
             }
+            // Publish a complete journal atomically. A torn temporary file
+            // cannot strand a boot fence before any guest bytes are written.
+            let prefix = "/proc/self/fd/\(bundleDirectory.descriptor)/"
+            guard renamex_np(prefix + temporary, prefix + VPhoneStagedDyldCache.pendingName, UInt32(RENAME_EXCL)) == 0 else {
+                throw Failure("Could not publish pending journal exclusively: \(String(cString: strerror(errno)))")
+            }
+            journalCreated = true
+            guard sync(bundleDirectory.descriptor) == 0 else {
+                throw Failure("Pending cache journal directory fsync: \(String(cString: strerror(errno)))")
+            }
+            try requireOwnership()
         }
 
         func publicationSucceeded() { published = true }
+
+        func releasePublicationLock() { journalFile = nil }
+
+        func validateRecoveryPlan(_ manifest: Manifest) throws {
+            if let recoveryPlanSHA256, try manifest.recoveryPlanSHA256() != recoveryPlanSHA256 {
+                throw Failure("Recovery manifest no longer matches its pending journal")
+            }
+        }
 
         func requirePublished() throws {
             guard published, journalIdentity != nil else { throw Failure("Cache publication and guest sync have not completed") }
@@ -119,23 +237,35 @@ public final class VPhoneStagedDyldCache {
 
         func clear() throws {
             try requirePublished()
-            guard let expected = journalIdentity, let metadata = try bundleDirectory.status(VPhoneStagedDyldCache.pendingName),
-                  metadata.st_mode & S_IFMT == S_IFREG, metadata.st_nlink == 1,
-                  expected == Identity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino), size: Int64(metadata.st_size)),
-                  try bundleDirectory.readData(VPhoneStagedDyldCache.pendingName) == journalBytes
-            else { throw Failure("Pending cache journal changed; retained recovery stage") }
+            try requireOwnership()
             guard unlinkat(bundleDirectory.descriptor, VPhoneStagedDyldCache.pendingName, 0) == 0,
                   sync(bundleDirectory.descriptor) == 0 else {
                 throw Failure("Pending cache journal removal fsync: \(String(cString: strerror(errno)))")
             }
+            cleared = true
+        }
+
+        func requireOwnership() throws {
+            let bundle = try bundleDirectory.metadata()
+            let disk = try bundleDirectory.openRegularFile("Disk.img", requireSingleLink: true)
+            guard bundleIdentity == Identity(device: UInt64(bundle.st_dev), inode: UInt64(bundle.st_ino), size: nil),
+                  diskIdentity == Identity(device: UInt64(disk.device), inode: UInt64(disk.inode), size: Int64(disk.size)) else {
+                throw Failure("VM bundle or Disk.img identity changed during cache publication")
+            }
+            guard let expected = journalIdentity, let metadata = try bundleDirectory.status(VPhoneStagedDyldCache.pendingName),
+                  let journalFile,
+                  metadata.st_mode & S_IFMT == S_IFREG, metadata.st_nlink == 1,
+                  metadata.st_uid == geteuid(), metadata.st_mode & 0o777 == 0o600,
+                  expected == Identity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino), size: Int64(metadata.st_size)),
+                  try bundleDirectory.refersTo(VPhoneStagedDyldCache.pendingName, file: journalFile),
+                  try Self.readJournal(journalFile) == journalBytes
+            else { throw Failure("Pending cache journal changed; retained recovery stage") }
         }
     }
 
-    /// Keep recovery copies until the receipt's renamed directory entry is
-    /// durable on the host. A failed receipt or directory sync cannot release
-    /// an already published cache's recovery stage.
+    /// The installer receipt describes the complete CFW run. Cache publication
+    /// is committed separately once its bytes and guest sync are verified.
     public final class Completion {
-        private var completed = false
         private let sync: (Int32) -> Int32
 
         public convenience init() { self.init(sync: { Glibc.fsync($0) }) }
@@ -153,12 +283,10 @@ public final class VPhoneStagedDyldCache {
             guard sync(directory.descriptor) == 0 else {
                 throw Failure("Receipt directory fsync: \(String(cString: strerror(errno)))")
             }
-            try pending.clear()
-            completed = true
         }
 
-        public func shouldRemoveWork(hasStagedCache: Bool) -> Bool {
-            completed || !hasStagedCache
+        public func shouldRemoveWork(pending: PendingPublication) -> Bool {
+            !pending.retainsRecoveryFiles
         }
     }
 
@@ -173,6 +301,25 @@ public final class VPhoneStagedDyldCache {
         var after: [String: Fingerprint]
         var published: [String]
         var currentFile: String?
+        var permissions: [String: Permissions]?
+
+        func recoveryPlanSHA256() throws -> String {
+            struct Plan: Encodable {
+                let before: [String: Fingerprint]
+                let after: [String: Fingerprint]
+                let permissions: [String: Permissions]?
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(Plan(before: before, after: after, permissions: permissions))
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
+    struct Permissions: Codable {
+        let owner: UInt32
+        let group: UInt32
+        let mode: UInt32
     }
 
     public let directory: VPhoneConfinedDirectory
@@ -223,6 +370,7 @@ public final class VPhoneStagedDyldCache {
         beforeURL = URL(fileURLWithPath: try before.path)
         afterURL = URL(fileURLWithPath: try after.path)
         manifest = Manifest(state: "copying", before: [:], after: [:], published: [])
+        manifest.permissions = [:]
         let names = try familyNames(in: source)
         if let seed {
             guard !names.contains(Self.undoName), try familyNames(in: seed) == names else {
@@ -239,14 +387,13 @@ public final class VPhoneStagedDyldCache {
             guard !overflow else { throw Failure("Cache family size overflow") }
             bytes = total
             identities[name] = file
+            manifest.permissions?[name] = Permissions(owner: file.owner, group: file.group, mode: file.mode & 0o777)
         }
         var space = statvfs()
         guard fstatvfs(directory.descriptor, &space) == 0 else { throw systemError("statvfs") }
-        let (required, overflow) = bytes.multipliedReportingOverflow(by: 4)
-        let (reserve, reserveOverflow) = required.addingReportingOverflow(1 << 30)
         let (available, availableOverflow) = UInt64(space.f_bavail).multipliedReportingOverflow(by: UInt64(space.f_frsize))
-        guard !overflow, !reserveOverflow, !availableOverflow, available > reserve
-        else { throw Failure("Insufficient local space for before/after cache and undo growth") }
+        guard !availableOverflow else { throw Failure("Local free-space calculation overflow") }
+        try Self.requireStagingSpace(cacheBytes: bytes, availableBytes: available)
         try saveManifest()
         for name in names {
             let guest = identities[name]!
@@ -292,9 +439,40 @@ public final class VPhoneStagedDyldCache {
     }
 
     static func seedSpaceRequired(for bytes: UInt64) -> UInt64? {
-        let (families, overflow) = bytes.multipliedReportingOverflow(by: 5)
+        spaceRequired(for: bytes, seed: true)
+    }
+
+    static func spaceRequired(for bytes: UInt64, seed: Bool = false) -> UInt64? {
+        let (families, overflow) = bytes.multipliedReportingOverflow(by: seed ? 5 : 4)
         let (required, reserveOverflow) = families.addingReportingOverflow(1 << 30)
         return overflow || reserveOverflow ? nil : required
+    }
+
+    static func requireStagingSpace(cacheBytes: UInt64, availableBytes: UInt64) throws {
+        guard let required = spaceRequired(for: cacheBytes), availableBytes > required else {
+            throw Failure("Insufficient CFW scratch space: the selected cache family needs 4 times its size plus 1 GiB free (cache: \(cacheBytes) bytes, available: \(availableBytes) bytes). Select a larger --work-parent.")
+        }
+    }
+
+    public static func preflightSpace(source: VPhoneConfinedDirectory, mainName: String,
+                                      workDirectory: VPhoneConfinedDirectory) throws {
+        let names = try source.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") || $0 == undoName }
+        guard names.contains(mainName) else { throw Failure("Missing main cache \(mainName)") }
+        var bytes: UInt64 = 0
+        for name in names {
+            let file = try source.openRegularFile(name, requireSingleLink: true)
+            guard file.size > 0 else { throw Failure("Empty cache family file: \(name)") }
+            let (total, overflow) = bytes.addingReportingOverflow(UInt64(file.size))
+            guard !overflow else { throw Failure("Cache family size overflow") }
+            bytes = total
+        }
+        var space = statvfs()
+        guard fstatvfs(workDirectory.descriptor, &space) == 0 else {
+            throw Failure("CFW scratch statvfs: \(String(cString: strerror(errno)))")
+        }
+        let (available, overflow) = UInt64(space.f_bavail).multipliedReportingOverflow(by: UInt64(space.f_frsize))
+        guard !overflow else { throw Failure("Local free-space calculation overflow") }
+        try requireStagingSpace(cacheBytes: bytes, availableBytes: available)
     }
 
     static func prepareSeed(
@@ -338,6 +516,7 @@ public final class VPhoneStagedDyldCache {
     /// cache inodes are retained, preserving xattrs, ACLs, ownership and flags.
     /// A new undo file is exclusively created and is always published last.
     public func publish(validateUndo: (URL) throws -> Void, synchronizeGuest: () throws -> Void) throws {
+        defer { pending.releasePublicationLock() }
         let names = try familyNames(in: after)
         guard Set(names).subtracting([Self.undoName]) == Set(manifest.before.keys).subtracting([Self.undoName]) else {
             throw Failure("Patcher added or removed cache family members")
@@ -369,7 +548,7 @@ public final class VPhoneStagedDyldCache {
         // before a durable journal can refer to it or any remote byte changes.
         guard io.sync(workDirectory.descriptor) == 0 else { throw systemError("Recovery work directory fsync") }
         guard io.sync(workParent.descriptor) == 0 else { throw systemError("Recovery work parent fsync") }
-        try pending.begin(recoveryStage: directory.path)
+        try pending.begin(recoveryStage: directory.path, recoveryPlanSHA256: manifest.recoveryPlanSHA256())
         manifest.state = "publishing"
         try saveManifest()
         let changed = Set(names).union(manifest.before.keys).filter { manifest.after[$0] != manifest.before[$0] }
@@ -428,8 +607,9 @@ public final class VPhoneStagedDyldCache {
         }
         try synchronizeGuest()
         pending.publicationSucceeded()
-        manifest.state = "published-awaiting-receipt"
+        manifest.state = "published"
         try saveManifest()
+        try pending.clear()
     }
 
     private func familyNames(in directory: VPhoneConfinedDirectory) throws -> [String] {
@@ -475,7 +655,7 @@ public final class VPhoneStagedDyldCache {
         try Self.fingerprint(descriptor, name: name, io: io)
     }
 
-    private static func fingerprint(_ descriptor: Int32, name: String, io: IO) throws -> Fingerprint {
+    static func fingerprint(_ descriptor: Int32, name: String, io: IO) throws -> Fingerprint {
         var metadata = stat()
         guard fstat(descriptor, &metadata) == 0, metadata.st_size >= 0 else {
             throw Failure("\(name): \(String(cString: strerror(errno)))")
@@ -495,7 +675,7 @@ public final class VPhoneStagedDyldCache {
         return Fingerprint(size: offset, sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined())
     }
 
-    private static func unchanged(_ descriptor: Int32, since metadata: stat) -> Bool {
+    static func unchanged(_ descriptor: Int32, since metadata: stat) -> Bool {
         var current = stat()
         return fstat(descriptor, &current) == 0 && current.st_size == metadata.st_size
             && current.st_mtim.tv_sec == metadata.st_mtim.tv_sec && current.st_mtim.tv_nsec == metadata.st_mtim.tv_nsec

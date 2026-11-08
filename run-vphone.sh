@@ -2,7 +2,7 @@
 # Boot a vphone-cli VM bundle (copied from a Mac) on Linux with QEMU's
 # vresearch101 machine.
 #
-#   run-vphone.sh <vm-dir> [extra qemu args...]
+#   run-vphone.sh [--dfu] <vm-dir> [extra qemu args...]
 #
 # <vm-dir> holds the bundle's Disk.img, nvram.bin and the two ROMs
 # (AVPBooter.vresearch1.bin, AVPSEPBooter.vresearch1.bin), plus a file
@@ -20,12 +20,20 @@
 # socat - VSOCK-CONNECT:$CID:1339
 set -euo pipefail
 
-VM=${1:?usage: run-vphone.sh <vm-dir> [qemu args...]}
+dfu=0
+if [ "${1:-}" = --dfu ]; then dfu=1; shift; fi
+VM=${1:?usage: run-vphone.sh [--dfu] <vm-dir> [qemu args...]}
 shift
+launcher_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 pending_cache=$VM/.vphone-dsc-pending.json
 if [ -e "$pending_cache" ] || [ -L "$pending_cache" ]; then
-  echo "run-vphone.sh: unresolved dyld cache publication; refusing to boot $VM. Repair the pending publication before retrying." >&2
-  exit 1
+  if [ "$dfu" = 1 ]; then
+    # A pending publication permits only a prepared ROM recovery boot.
+    python3 "$launcher_root/tools/nvram-autoboot.py" "$VM/nvram.bin" --auto-boot false --require-auto-boot
+  else
+    echo "run-vphone.sh: unresolved dyld cache publication; refusing ordinary boot of $VM. Boot the SSH ramdisk with tools/dfu-up.sh, then run cfw recover-cache." >&2
+    exit 1
+  fi
 fi
 QEMU=${QEMU:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/qemu/build/qemu-system-aarch64}   # this checkout's
 SMP=${SMP:-8}
