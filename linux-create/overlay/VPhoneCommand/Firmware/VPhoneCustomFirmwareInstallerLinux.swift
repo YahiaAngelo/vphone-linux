@@ -66,7 +66,7 @@ struct VPhoneLinuxGuestConnection {
             let identity = try PropertyListSerialization.propertyList(
                 from: identifier, format: nil) as? [String: Any],
             let number = identity["ECID"] as? NSNumber,
-            CFGetTypeID(number) != CFBooleanGetTypeID(),
+            CoreFoundation.CFGetTypeID(number) != CoreFoundation.CFBooleanGetTypeID(),
             let selected = UInt64(number.stringValue), selected != 0
         else {
             throw ValidationError("The selected VM's config.plist has no valid machine ECID; refusing to connect to an unbound CFW target.")
