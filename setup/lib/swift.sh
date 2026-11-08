@@ -11,8 +11,9 @@ _swift_here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The one place the Swift version is pinned.
 VPHONE_SWIFT_VERSION=${VPHONE_SWIFT_VERSION:-$(tr -d '[:space:]' < "$_swift_here/../../linux-create/.swift-version")}
 SWIFTLY_HOME_DIR=${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}
+SWIFTLY_BIN_DIR=${SWIFTLY_BIN_DIR:-$SWIFTLY_HOME_DIR/bin}
 SWIFTLY_TOOLCHAINS_DIR=${SWIFTLY_TOOLCHAINS_DIR:-$SWIFTLY_HOME_DIR/toolchains}
-export SWIFTLY_HOME_DIR SWIFTLY_TOOLCHAINS_DIR
+export SWIFTLY_HOME_DIR SWIFTLY_BIN_DIR SWIFTLY_TOOLCHAINS_DIR
 
 # The platform swiftly installs the toolchain for, always named: swiftly's own detection accepts
 # only the exact releases it lists (Fedora 44 is "Unsupported Linux platform"), and swift.org
@@ -74,26 +75,41 @@ swift() {
   LD_LIBRARY_PATH="$(swift_compat_dir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$(swift_bin)" "$@"
 }
 
-# Install swiftly (if missing) and the pinned toolchain (if missing).
+# Pass the custom install locations to swiftly, which keeps its home and binary
+# directories separate when SWIFTLY_BIN_DIR is not set explicitly.
+swiftly_init() {
+  local swiftly_binary=$1 plat=${2:-}
+  SWIFTLY_HOME_DIR="$SWIFTLY_HOME_DIR" SWIFTLY_BIN_DIR="$SWIFTLY_BIN_DIR" \
+    "$swiftly_binary" init --assume-yes --skip-install --no-modify-profile --quiet-shell-followup \
+    ${plat:+--platform "$plat"}
+}
+
 ensure_swift() {
-  local swiftly=$SWIFTLY_HOME_DIR/bin/swiftly plat arch tmp
+  local swiftly=$SWIFTLY_BIN_DIR/swiftly plat tmp
   if [ -x "$(swift_bin)" ]; then swift_make_compat; return 0; fi
-  plat=$(swiftly_platform); arch=$(uname -m)
+  plat=$(swiftly_platform)
   if [ ! -x "$swiftly" ]; then
-    printf '==> Installing swiftly into %s\n' "$SWIFTLY_HOME_DIR"
+    printf '==> Installing swiftly into %s\n' "$SWIFTLY_BIN_DIR"
+    local arch
+    arch=$(uname -m)
     tmp=$(mktemp -d)
-    curl -fsSL -o "$tmp/swiftly.tar.gz" "https://download.swift.org/swiftly/linux/swiftly-$arch.tar.gz"
-    tar -xzf "$tmp/swiftly.tar.gz" -C "$tmp"
-    # --no-modify-profile: keep the toolchain's clang/lld off the login PATH.
-    "$tmp/swiftly" init --assume-yes --skip-install --no-modify-profile --quiet-shell-followup \
-      ${plat:+--platform "$plat"}
-    rm -rf "$tmp"
+    if ! curl -fsSL -o "$tmp/swiftly.tar.gz" "https://download.swift.org/swiftly/linux/swiftly-$arch.tar.gz" ||
+       ! tar -xzf "$tmp/swiftly.tar.gz" -C "$tmp"; then
+      rm -rf -- "$tmp"
+      return 1
+    fi
+    if ! swiftly_init "$tmp/swiftly" "$plat"; then
+      rm -rf -- "$tmp"
+      return 1
+    fi
+    rm -rf -- "$tmp"
+    [ -x "$swiftly" ] || { printf 'ERROR swiftly init did not install the binary at %s\n' "$swiftly" >&2; return 1; }
   fi
   printf '==> Installing Swift %s with swiftly%s\n' "$VPHONE_SWIFT_VERSION" "${plat:+ (platform $plat)}"
   tmp=$(mktemp)
   # swiftly writes the distro packages it thinks are missing to $tmp. setup.sh's lists
   # (setup/lib/packages.sh) carry what the build needs, so this is only shown.
-  PATH="$SWIFTLY_HOME_DIR/bin:$PATH" "$swiftly" install "$VPHONE_SWIFT_VERSION" \
+  PATH="$SWIFTLY_BIN_DIR:$PATH" "$swiftly" install "$VPHONE_SWIFT_VERSION" \
     --assume-yes --post-install-file "$tmp"
   if [ -s "$tmp" ]; then
     printf 'WARN swiftly suggests these system packages (the vphone-cli build does not need them):\n' >&2
