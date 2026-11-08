@@ -590,7 +590,7 @@ do_first_boot() {
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.status",...}'   # until data_migration_done
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.skip","params":{"force":true},"id":1}'
     dry python3 "$T/auto-lock-never.py" "$VM" "$CID"
-    [ "$SCALE" = 3 ] || dry python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
+    [ "$SCALE" = 3 ] || dry python3 "$T/guest-dt-scale.py" "$CID" "$SCALE" --json
     [ "$TRIM" = 0 ] || dry python3 "$T/service-profile.py" "$CID" trimmed
     return 0
   fi
@@ -615,10 +615,22 @@ do_first_boot() {
   python3 "$T/auto-lock-never.py" "$VM" "$CID"
   local restart=0
   if [ "$SCALE" != 3 ]; then
-    # iOS 27 also takes the scale from the guest's device tree: set it, then restart the guest
-    # (vphoned shuts it down; QEMU exits by itself) so the new scale applies.
-    python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
-    restart=1
+    # A matching tree can belong to an interrupted run whose running UI still
+    # uses the old scale. The helper verifies both before omitting the restart.
+    local scale_result
+    scale_result=$(python3 "$T/guest-dt-scale.py" "$CID" "$SCALE" --json)
+    restart=$(printf '%s' "$scale_result" | python3 -c '
+import json, sys
+result = json.load(sys.stdin)
+if (not isinstance(result, dict)
+        or type(result.get("changed")) is not bool
+        or type(result.get("restart_required")) is not bool
+        or type(result.get("scale")) is not int
+        or result["scale"] != int(sys.argv[1])
+        or (result["changed"] and not result["restart_required"])):
+    sys.exit("invalid guest device-tree scale result")
+print(int(result["restart_required"]))
+' "$SCALE")
   fi
   if [ "$TRIM" = 1 ]; then
     # Takes effect at the next boot, the same restart.

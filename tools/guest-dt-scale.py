@@ -13,14 +13,25 @@ every display-scale and artwork-scale-factor under /product gets SCALE. The valu
 integers, so nothing moves. Without SCALE it prints what the tree holds. It keeps the original
 next to it in the guest (devicetree.img4.before-scale, once) and on the host
 (runs/guest-dt-scale/), and removes MobileGestalt's cache, which keeps the first boot's answers.
+Unchanged trees are not rewritten or backed up again. With --json, stdout contains changed,
+scale and restart_required; an unchanged tree also needs device.screen to confirm the running
+scale before the cache and running guest can be left alone. A stale running scale invalidates
+the cache and still requires a restart. Existing positional calls print human-readable output.
 The new scale shows from the next boot. Use it together with display-scale.py and the VM's
 gfx-res (docs/ADVANCED.md, "Display scale"); tools/set-scale.sh runs it."""
-import base64, json, os, socket, struct, sys, time
+import argparse, base64, json, math, os, socket, struct, sys, time
 
 CACHE = ("/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache"
          "/Library/Caches/com.apple.MobileGestalt.plist")
-cid = int(sys.argv[1])
-scale = int(sys.argv[2]) if len(sys.argv) > 2 else None
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument("cid", type=int)
+parser.add_argument("scale", type=int, choices=(1, 2, 3), nargs="?")
+parser.add_argument("--json", action="store_true", help="report the change and restart requirement as JSON")
+args = parser.parse_args()
+if args.json and args.scale is None:
+    parser.error("--json requires SCALE")
+cid, scale = args.cid, args.scale
+output = sys.stderr if args.json else sys.stdout
 
 
 def response(s):
@@ -107,36 +118,61 @@ def walk(dt, off, path, hits):
     return off
 
 
+def read_tree(path):
+    result = rpc("files.read", path=path, binary=True, limit=2 << 20)
+    data = base64.b64decode(result["content"], validate=True)
+    if result.get("truncated") is not False or result.get("size") != len(data):
+        sys.exit("files.read: expected the complete device tree")
+    return data
+
+
 boot = [e["name"] for e in rpc("files.list", path="/private/preboot")["entries"]
         if e["type"] == "dir" and len(e["name"]) == 96]
 if len(boot) != 1:
     sys.exit(f"expected one boot manifest directory in /private/preboot, found {boot}")
 path = f"/private/preboot/{boot[0]}/usr/standalone/firmware/devicetree.img4"
-img4 = bytearray(base64.b64decode(rpc("files.read", path=path, binary=True)["content"]))
+original = read_tree(path)
+img4 = bytearray(original)
 start, end = payload(img4)
 hits = []
 walk(img4, start, "", hits)
 if not hits:
     sys.exit("no display-scale or artwork-scale-factor under /product: the LLB patch alone sets this guest's scale")
 for where, at in hits:
-    print(f"{where} = {struct.unpack_from('<I', img4, at)[0]}")
+    print(f"{where} = {struct.unpack_from('<I', img4, at)[0]}", file=output)
 if scale is None:
+    sys.exit()
+
+for _, at in hits:
+    struct.pack_into("<I", img4, at, scale)
+if bytes(img4) == original:
+    restart = False
+    if args.json:
+        running = rpc("device.screen").get("scale")
+        if type(running) not in (int, float) or not math.isfinite(running) or running <= 0:
+            sys.exit("device.screen: expected a positive numeric scale")
+        restart = running != scale
+        if restart:
+            rpc("files.remove", path=CACHE)
+        print(json.dumps({"changed": False, "scale": scale, "restart_required": restart}))
+    else:
+        print(f"the device tree already requests {scale}x; no files or cache changed.")
     sys.exit()
 
 host_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "guest-dt-scale")
 os.makedirs(host_dir, exist_ok=True)
 backup = os.path.join(host_dir, f"devicetree-cid{cid}-{time.strftime('%Y%m%d-%H%M%S')}.img4")
-open(backup, "wb").write(img4)
+open(backup, "wb").write(original)
 names = [e["name"] for e in rpc("files.list", path=os.path.dirname(path))["entries"]]
 if "devicetree.img4.before-scale" not in names:
-    rpc("files.write", path=path + ".before-scale", content=base64.b64encode(bytes(img4)).decode(),
+    rpc("files.write", path=path + ".before-scale", content=base64.b64encode(original).decode(),
         encoding="base64")
-for _, at in hits:
-    struct.pack_into("<I", img4, at, scale)
 rpc("files.write", path=path, content=base64.b64encode(bytes(img4)).decode(), encoding="base64")
-check = base64.b64decode(rpc("files.read", path=path, binary=True)["content"])
+check = read_tree(path)
 if check != bytes(img4):
     sys.exit(f"the tree read back differs from what was written; the original is in {backup}")
 rpc("files.remove", path=CACHE)
-print(f"set {len(hits)} value(s) to {scale}; original kept in {backup} and next to it in the guest.")
-print("Reboot the VM (with display-scale.py and gfx-res at the same scale) to see it.")
+print(f"set {len(hits)} value(s) to {scale}; original kept in {backup} and next to it in the guest.", file=output)
+print("Reboot the VM (with display-scale.py and gfx-res at the same scale) to see it.", file=output)
+if args.json:
+    print(json.dumps({"changed": True, "scale": scale, "restart_required": True}))
