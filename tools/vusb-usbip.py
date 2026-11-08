@@ -107,38 +107,43 @@ class VUSB:
         await self.writer.drain()
 
     async def run(self):
-        while True:
-            hdr = await self.reader.readexactly(4)
-            (length,) = struct.unpack("<I", hdr)
-            if length == 0:
-                continue  # an empty send (OpenAVB answers a malformed event so)
-            if length < 2 or length > VUSB_MSG_MAX:
-                raise ValueError(f"invalid vusb response length {length}")
-            msg = await self.reader.readexactly(length)
-            code, ep, data = msg[0], msg[1], msg[2:]
-            if code == CODE_DRIVER_RESET:
-                log("guest re-initialised its USB controller: device unplugged")
-                self._unplug()
-            elif code == CODE_RESET:
-                if self.reset_pending:
+        try:
+            while True:
+                hdr = await self.reader.readexactly(4)
+                (length,) = struct.unpack("<I", hdr)
+                if length == 0:
+                    continue  # an empty send (OpenAVB answers a malformed event so)
+                if length < 2 or length > VUSB_MSG_MAX:
+                    raise ValueError(f"invalid vusb response length {length}")
+                msg = await self.reader.readexactly(length)
+                code, ep, data = msg[0], msg[1], msg[2:]
+                if code == CODE_DRIVER_RESET:
+                    log("guest re-initialised its USB controller: device unplugged")
+                    self._unplug()
+                elif code == CODE_RESET:
+                    if self.reset_pending:
+                        await self.reset_responses.put(code)
+                elif code == CODE_NAK and ep == 0 and self.reset_pending:
                     await self.reset_responses.put(code)
-            elif code == CODE_NAK and ep == 0 and self.reset_pending:
-                await self.reset_responses.put(code)
-            elif code == CODE_ABORT:
-                await self.aborts[ep].put((code, data))
-            elif ep == 0:
-                await self.ctrl.put((code, data))
-            elif ep & 0x80:
-                await self.in_data[ep].put((code, data))
-            else:
-                await self.out_acks[ep].put((code, data))
+                elif code == CODE_ABORT:
+                    await self.aborts[ep].put((code, data))
+                elif ep == 0:
+                    await self.ctrl.put((code, data))
+                elif ep & 0x80:
+                    await self.in_data[ep].put((code, data))
+                else:
+                    await self.out_acks[ep].put((code, data))
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            self._unplug()
 
     async def _next(self, queue, timeout=URB_TIMEOUT, retry=None):
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
+        deadline = loop.time() + timeout if timeout is not None else None
         while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
+            remaining = deadline - loop.time() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
                 raise asyncio.TimeoutError
             code, data = await asyncio.wait_for(queue.get(), remaining)
             if code == CODE_DRIVER_RESET:
@@ -200,7 +205,9 @@ class VUSB:
                 await self.send(address, MSG_DATA, payload if not direction_in else b"")
 
             await retry()
-            result = await self._next(queue, retry=retry)
+            # The host owns bulk-IN deadlines and cancels with USB/IP UNLINK.
+            # A quiet RestoreOS may still be working on metadata for minutes.
+            result = await self._next(queue, timeout=None if direction_in else URB_TIMEOUT, retry=retry)
             if not direction_in:
                 return b""
             if max_length is not None and len(result) > max_length:
@@ -375,7 +382,7 @@ class USBIPBridge:
                     task.add_done_callback(lambda done, seq=seqnum:
                                            self._submit_done(done, seq, tasks))
                 elif command == CMD_UNLINK:
-                    rest = await reader.readexactly(20)
+                    rest = await reader.readexactly(44)
                     await self.handle_unlink(rest, writer)
                 else:
                     raise ValueError(f"unsupported USB/IP command {command}")
@@ -455,16 +462,17 @@ class USBIPBridge:
                 actual = length
                 if DEBUG and ep == 1 and payload:
                     self._log_mux(seqnum, "out", payload)
-        except OSError as e:
-            status = -(e.errno or errno.EIO)
-        except Stall:
-            status = -errno.EPIPE
         except asyncio.TimeoutError:
             if DEBUG:
                 log(f"USB/IP URB {seqnum} timed out after {URB_TIMEOUT:g}s")
             status = -errno.ETIMEDOUT
+        except OSError as e:
+            status = -(e.errno or errno.EIO)
+        except Stall:
+            status = -errno.EPIPE
         except asyncio.CancelledError:
-            status = -errno.ECONNRESET
+            # A successful RET_UNLINK completes the canceled URB by itself.
+            return
         except Exception as e:
             log(f"USB/IP URB {seqnum} failed: {e}")
             status = -errno.EIO
@@ -496,16 +504,18 @@ class USBIPBridge:
         await self.write(writer, hdr + (data if direction == 1 else b""))
 
     async def handle_unlink(self, rest, writer):
-        seqnum, devid, direction, ep, target = struct.unpack("!IIIII", rest)
+        seqnum, _devid, _direction, _ep, target = struct.unpack("!IIIII24x", rest)
         pending = self.pending.get(target)
         task = pending[0] if pending else None
-        status = 0 if task and not task.done() else -errno.ENOENT
-        await self.write(writer, struct.pack("!IIIIIi", RET_UNLINK, seqnum,
-                                            devid, direction, ep, status))
-        if status == 0:
+        active = task is not None and not task.done()
+        if active:
+            task.cancel()
+        status = -errno.ECONNRESET if active else 0
+        await self.write(writer, struct.pack("!IIIIIi24x", RET_UNLINK, seqnum,
+                                            0, 0, 0, status))
+        if active:
             _, target_ep, target_direction = pending
             await self.usb.abort(target_ep, target_direction == 1)
-            task.cancel()
 
     async def follow_stages(self):
         """Each guest boot stage presents a new device: on every driver reset, end the USB/IP

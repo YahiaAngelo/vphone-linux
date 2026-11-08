@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: USB/IP framing and timeout regressions
+        run: python3 tools/test_vusb_usbip.py
       - name: bash -n (parse every script)
         run: |
           set -e
