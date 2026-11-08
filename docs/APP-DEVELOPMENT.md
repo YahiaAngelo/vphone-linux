@@ -107,6 +107,9 @@ tools/vphoned.sh POST /v1/rpc '{"method":"logs.crashes","params":{"bundle_id":"c
 tools/vphoned.sh POST /v1/rpc '{"method":"logs.crash","params":{"path":"<a path from the list>"},"id":1}'
 ```
 
+If the app dies a few seconds after launching with `scene-create watchdog transgression`, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ## 6. Drive and check the app from the host
 
 vphoned also takes input and screenshots, which is enough for simple automated checks.
