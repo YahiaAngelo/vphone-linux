@@ -22,12 +22,15 @@ inner display; through book it folds every time (measured 2026-10-31, iPhone19,4
 """
 import argparse
 import base64
+import ctypes
 import datetime
+import errno
 import json
 import os
 import select
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -45,6 +48,40 @@ def log(*a):
 
 
 # ------------------------------------------------------------------ vphoned
+def _connect_vsock(s, cid, timeout):
+    s.settimeout(timeout)
+    if hasattr(socket, "AF_VSOCK"):
+        s.connect((cid, PORT))
+        return
+    # A Python build without AF_VSOCK cannot pack its address tuple either.
+    # Linux sockaddr_vm: family, reserved, port, CID, flags, reserved bytes.
+    address = ctypes.create_string_buffer(struct.pack("@HHIIB3x", 40, 0, PORT, cid, 0))
+    connect = ctypes.CDLL(None, use_errno=True).connect
+    connect.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+    connect.restype = ctypes.c_int
+    deadline = time.monotonic() + timeout
+    s.setblocking(False)
+    result = connect(s.fileno(), address, 16)
+    error = ctypes.get_errno() if result != 0 else 0
+    pending = (errno.EINPROGRESS, errno.EALREADY, errno.EINTR)
+    while error not in (0, errno.EISCONN):
+        if error not in pending:
+            raise OSError(error, os.strerror(error))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out connecting to vphoned")
+        try:
+            _, writable, _ = select.select([], [s], [], remaining)
+        except InterruptedError:
+            continue
+        if writable:
+            error = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("timed out connecting to vphoned")
+    s.settimeout(remaining)
+
+
 def _response(s):
     """One HTTP response's body, up to its Content-Length (vphoned can keep the connection open)."""
     raw = b""
@@ -67,10 +104,9 @@ def _response(s):
 def rpc(cid, method, timeout=30, **params):
     """A vphoned RPC; the result, or raises RuntimeError with vphoned's message."""
     body = json.dumps({"method": method, "params": params, "id": 1}).encode()
-    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-    s.settimeout(timeout)
+    s = socket.socket(getattr(socket, "AF_VSOCK", 40), socket.SOCK_STREAM)
     try:
-        s.connect((cid, PORT))
+        _connect_vsock(s, cid, timeout)
         # vphoned refuses requests whose Host is not localhost.
         s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
                   b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
