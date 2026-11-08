@@ -13,6 +13,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  swiftly-private-prefix:
+    name: private Swiftly installation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned, signed Swiftly binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_root="$RUNNER_TEMP/swiftly-1.2.0"
+          gpg_home="$RUNNER_TEMP/swiftly-gnupg"
+          mkdir -p "$task_root" "$gpg_home"
+          chmod 700 "$gpg_home"
+          archive="$task_root/swiftly-1.2.0-x86_64.tar.gz"
+          signature="$archive.sig"
+          curl -fsSL --retry 3 -o "$archive" \
+            https://download.swift.org/swiftly/linux/swiftly-1.2.0-x86_64.tar.gz
+          curl -fsSL --retry 3 -o "$signature" \
+            https://download.swift.org/swiftly/linux/swiftly-1.2.0-x86_64.tar.gz.sig
+          curl --compressed -fsSL --retry 3 -o "$task_root/swift.org-keys.asc" \
+            https://www.swift.org/keys/all-keys.asc
+          printf '%s  %s\n' \
+            0b26b568811404374c7d7f07276b6aad4145db5d1893a45f307de6a94ca8d9c3 "$archive" \
+            | sha256sum --check --status
+          GNUPGHOME="$gpg_home" gpg --batch --import "$task_root/swift.org-keys.asc"
+          verification=$(GNUPGHOME="$gpg_home" gpg --batch --status-fd 1 \
+            --verify "$signature" "$archive" 2>&1)
+          grep -Fq '[GNUPG:] VALIDSIG E813C892820A6FA13755B268F167DF1ACF9CE069' \
+            <<<"$verification"
+          tar -xzf "$archive" -C "$task_root" swiftly
+          bash setup/test/swiftly-private-prefix.sh "$task_root/swiftly"
+
   lint:
     name: shellcheck + syntax
     runs-on: ubuntu-latest
