@@ -364,6 +364,7 @@ sshrd_status() {
 }
 
 do_cfw() {
+  local cfw_work_parent=${VPHONE_CFW_WORK_PARENT:-/var/tmp}
   usb_helpers
   # The SSH tools the ramdisk gets (dropbear, bash, sftp-server, ...): fetched once, pinned and
   # checksummed (tools/ssh-ramdisk-stage.sh).
@@ -397,7 +398,7 @@ do_cfw() {
   fi
   dry "$T/ssh-ramdisk.sh" "$GIGALOCKER_SH"
   dry timeout 1800 "$T/ssh-ramdisk.sh" '/usr/bin/mount_filesystems; /sbin/mount'
-  dry sudo "$VC" cfw install -l "$VSETUP_DEVICES" "$NAME" --work-parent /var/tmp --keep-artifacts
+  dry sudo "$VC" cfw install -l "$VSETUP_DEVICES" "$NAME" --work-parent "$cfw_work_parent" --keep-artifacts
   dry "$T/ssh-ramdisk.sh" 'sync; /sbin/umount /mnt2; /sbin/umount /mnt6; /sbin/umount /mnt1; sync'
   dry "$T/dfu-stop.sh" "$VM"     # the flip below edits Disk.img: no VM may have it open
   dry "$VC" cfw flip-snapshot "$VM/Disk.img"
