@@ -75,28 +75,21 @@ if [ "${GFX:-0}" = 1 ]; then
   # screens per frame); at 448 the runtime aliases them instead.
   GFX_RES=${GFX_RES:-$(cat "$VM/gfx-res" 2>/dev/null || echo 1290x2796)}
   machine+=",gfx-device=apple-gfx-mmio,memory-backend=ram0,gfx-modes=${GFX_MODES:-$GFX_RES@60}"
-  # Keep the profile's physical density separate from framebuffer/render scale.
-  # Older bundles without pixelsPerInch retain QEMU's default physical size.
-  gfx_ppi=$(python3 - "$VM/config.plist" "${GFX_PPI:-}" <<'PY'
-import plistlib
+  # Older QEMU builds reject unknown device globals. Forward density only when
+  # the caller opts in and the selected QEMU supports pixels-per-inch.
+  if [ -n "${GFX_PPI:-}" ]; then
+    gfx_ppi=$(python3 - "${GFX_PPI}" <<'PY'
 import sys
 
-value = sys.argv[2]
-source = "GFX_PPI"
-if value:
-    if value.isascii() and value.isdecimal():
-        value = int(value)
-else:
-    with open(sys.argv[1], "rb") as config:
-        value = (plistlib.load(config).get("screenConfig") or {}).get("pixelsPerInch")
-    source = "screenConfig.pixelsPerInch"
-if value is not None:
-    if type(value) is not int or not 1 <= value <= 65535:
-        sys.exit(f"run-vphone.sh: {source} must be an integer from 1 to 65535")
-    print(value)
+value = sys.argv[1]
+if not value.isascii() or not value.isdecimal():
+    sys.exit("run-vphone.sh: GFX_PPI must be an integer from 1 to 65535")
+digits = value.lstrip("0") or "0"
+if len(digits) > 5 or not 1 <= int(digits) <= 65535:
+    sys.exit("run-vphone.sh: GFX_PPI must be an integer from 1 to 65535")
+print(int(digits))
 PY
-  )
-  if [ -n "$gfx_ppi" ]; then
+    )
     args+=(-global "apple-gfx-mmio.pixels-per-inch=$gfx_ppi")
   fi
   # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
