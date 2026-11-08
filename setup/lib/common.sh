@@ -12,6 +12,7 @@ VSETUP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VSETUP_SRC=${VSETUP_SRC:-$VSETUP_ROOT/..}                      # git checkout + submodules
 VSETUP_RELEASE=${VSETUP_RELEASE:-$HOME/vphone-setup-work/vphone-release}  # vphone-cli release zip tree
 VSETUP_DEVICES=${VSETUP_DEVICES:-$HOME/vphone-setup-work/devices}         # created VM bundles ("library")
+VSETUP_CACHE=${VSETUP_CACHE:-$HOME/.cache/vphone}              # firmware and GPU-driver cache
 VSETUP_DATA=${VSETUP_DATA:-$VSETUP_ROOT/data}
 VPHONE_CLI_VERSION=${VPHONE_CLI_VERSION:-2.14.2}
 VPHONE_CLI_PUBLIC=${VPHONE_CLI_PUBLIC:-2.14.2}                 # the pairing linux-create is synced against
@@ -21,6 +22,19 @@ VPHONE_LINUX_BRANCH=${VPHONE_LINUX_BRANCH:-development}        # the branch the 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
+
+check_vm_disk_space() {
+  local dir free
+  for dir in "$VSETUP_DEVICES" "$VSETUP_CACHE"; do
+    mkdir -p "$dir"
+    free=$(df -P -BG "$dir" | awk 'NR == 2 { sub(/G$/, "", $4); print $4 }')
+    if [ "${free:-0}" -lt 25 ]; then
+      die "only ${free} GB free under $dir: making a VM needs about 60 GB (set VSETUP_DEVICES and/or VSETUP_CACHE to paths on a larger filesystem)"
+    elif [ "$free" -lt 60 ]; then
+      warn "only ${free} GB free under $dir: making a VM needs about 60 GB in all"
+    fi
+  done
+}
 
 confirm() { # confirm <prompt>
   [ "${VSETUP_ASSUME_YES:-0}" = 1 ] && return 0
