@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'linux-create/**', 'setup/**', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -13,6 +13,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cfw-connection:
+    name: CFW connection construction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install local transport test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-3 openssh-client
+      - name: Compile and check literal connection arguments
+        run: |
+          swiftc --version
+          uv run --python 3.12 linux-create/tests/test_guest_connection.py
+          uv run --python 3.12 linux-create/tests/test_ssh_wrappers.py
+
   lint:
     name: shellcheck + syntax
     runs-on: ubuntu-latest
