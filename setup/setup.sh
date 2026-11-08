@@ -216,12 +216,9 @@ build_qemu() {
     ninja qemu-system-aarch64 )
 }
 build_creator() {
-  log " Building vphone-cli's firmware tooling for Linux (vphone-cli $VPHONE_CLI_PUBLIC)"
-  local src="$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_PUBLIC"
-  mkdir -p "$(dirname "$src")"
-  if [ ! -e "$src/.git" ]; then   # -e: a git worktree has a .git file, not a folder
-    git clone --depth 1 --branch "$VPHONE_CLI_PUBLIC" "$VPHONE_CLI_REPO" "$src"
-  fi
+  log " Building vphone-cli's firmware tooling for Linux (source $VPHONE_CLI_REF)"
+  local src="$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_VERSION"
+  ensure_vphone_cli_source "$src"
   VPHONE_CLI="$src" "$VSETUP_SRC/linux-create/build.sh"
 }
 build_usbmuxd() { "$VSETUP_SRC/tools/build-usbmuxd-32k.sh"; }
