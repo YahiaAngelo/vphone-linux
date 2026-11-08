@@ -64,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Explicit ECID selection regressions
+        run: python3 -m unittest discover -s tests -p 'test_usbmux_connect.py' -v
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: USB/IP framing and timeout regressions
