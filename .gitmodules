@@ -8,8 +8,8 @@
 [submodule "reims-vgpu"]
 	path = reims-vgpu
 	url = https://github.com/YahiaAngelo/reims-vgpu.git
-	branch = vphone-next3
+	branch = vphone-next4
 [submodule "metal2vulkan"]
 	path = metal2vulkan
 	url = https://github.com/YahiaAngelo/metal2vulkan.git
-	branch = vphone-next3
+	branch = vphone-next4
