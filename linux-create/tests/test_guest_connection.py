@@ -171,6 +171,9 @@ do {
                 ], cwd=root, env=os.environ | result["environment"] | {"CAPTURE": str(capture)},
                    capture_output=True, text=True, timeout=5)
                 self.assertNotEqual(completed.returncode, 0)
+                self.assertTrue(capture.exists(),
+                                f"Local connector did not run (ssh exit {completed.returncode}).\n"
+                                f"stdout: {completed.stdout}\nstderr: {completed.stderr}")
                 self.assertEqual(json.loads(capture.read_text()), {"args": ["proxy", "22"], "ecid": "0000000000001234"})
                 self.assertFalse((root / "PWNED").exists())
             finally:
