@@ -260,7 +260,7 @@ Preboot `disk1s5` at `/mnt6`, and xART `disk1s3` at `/mnt7` (it holds the gigalo
 With the ramdisk up and its volumes mounted:
 
 ```sh
-sudo $VC cfw install -l vms myphone --work-parent /var/tmp --keep-artifacts
+sudo $VC cfw install -l vms myphone --work-parent "${VPHONE_CFW_WORK_PARENT:-/var/tmp}" --keep-artifacts
 ```
 
 - The installer mounts the guest's System, xART and Preboot on the host with sshfs, through
@@ -273,7 +273,10 @@ sudo $VC cfw install -l vms myphone --work-parent /var/tmp --keep-artifacts
   small files, and the host disk barely grows for minutes at a time while it copies; it is not stuck.
 - It needs rcodesign (found on `PATH`, in `~/.cargo/bin` of the user who ran sudo, or at
   `$VPHONE_RCODESIGN`) and the APFS driver from SETUP step 3 (`modprobe apfs`, else
-  `$VPHONE_APFS_KO`, else `.build/linux-apfs-rw/apfs.ko`), and about 8 GB free in `/var/tmp`.
+  `$VPHONE_APFS_KO`, else `.build/linux-apfs-rw/apfs.ko`). It also needs about 8 GB of working space
+  on the filesystem selected for `--work-parent`. Set `VPHONE_CFW_WORK_PARENT` to select a
+  different path; it defaults to `/var/tmp`. The `cfw` command retains ownership and permission
+  checks on the selected directory.
 - It renames the xART gigalocker to `AA.gl`, installs vphoned and the launchd hook, and ends with
   `[+] Linux guest install complete` and a new `PatchReceipt.plist`.
 - Without `--keep-artifacts` the restore tree is deleted at the end (12 GB back; a new restore then
