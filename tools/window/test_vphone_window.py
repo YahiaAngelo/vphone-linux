@@ -95,7 +95,7 @@ class GuestButtonTests(unittest.TestCase):
                     ("input.button", {"name": expected}),
                 ])
 
-    def test_invalid_guest_state_fails_closed(self):
+    def test_invalid_guest_state_fails_closed_for_lock(self):
         calls = []
 
         def rpc(cid, method, timeout=30, **params):
@@ -104,9 +104,27 @@ class GuestButtonTests(unittest.TestCase):
 
         with mock.patch.object(window, "rpc", side_effect=rpc):
             with self.assertRaisesRegex(RuntimeError, "invalid button state"):
-                window.Guest(3).button("home")
+                window.Guest(3).button("lock")
 
         self.assertEqual(calls, ["notify.state"])
+
+    def test_home_without_a_usable_state_sends_the_plain_button(self):
+        for answer in ({"state": True}, OSError("vphoned down")):
+            with self.subTest(answer=answer):
+                calls = []
+
+                def rpc(cid, method, timeout=30, **params):
+                    calls.append((method, params))
+                    if method == "notify.state":
+                        if isinstance(answer, Exception):
+                            raise answer
+                        return answer
+                    return {}
+
+                with mock.patch.object(window, "rpc", side_effect=rpc):
+                    window.Guest(3).button("home")
+
+                self.assertEqual(calls[-1], ("input.button", {"name": "home"}))
 
     def test_home_and_lock_dispatch_to_stateful_mapping(self):
         for button in ("home", "lock"):

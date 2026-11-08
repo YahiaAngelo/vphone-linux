@@ -167,9 +167,20 @@ class Guest:
 
         name = ("com.apple.springboard.lockstate" if button == "home"
                 else "com.apple.springboard.hasBlankedScreen")
-        state = call("notify.state", name=name)
+        try:
+            state = call("notify.state", name=name)
+        except (OSError, RuntimeError):
+            if button != "home":
+                raise
+            state = None
         if (not isinstance(state, dict) or type(state.get("state")) is not int
                 or state["state"] not in (0, 1)):
+            if button == "home":
+                # No usable lock state (an older vphoned, a slow guest): a plain Home press, as
+                # before this button was state-aware. Lock still fails closed.
+                log("home: no lock state from the guest; sending the plain button")
+                call("input.button", name="home")
+                return
             raise RuntimeError("guest returned invalid button state")
         if button == "lock":
             call("input.button", name="wake" if state["state"] else "power")
