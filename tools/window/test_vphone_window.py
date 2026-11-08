@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import plistlib
 import subprocess
@@ -120,7 +121,7 @@ class GuestButtonTests(unittest.TestCase):
 
 
 class WindowLoopTests(unittest.TestCase):
-    def run_loop(self, orientations, parent_ids):
+    def run_loop(self, orientations, parent_ids, config=None):
         events = []
         windows = []
         guests = []
@@ -154,27 +155,64 @@ class WindowLoopTests(unittest.TestCase):
                 return []
 
         parent_ids = iter(parent_ids)
-        with mock.patch.object(window, "Guest", FakeGuest), \
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = [str(MODULE_PATH), "/tmp/control.sock"]
+            if config is not None:
+                config_path = Path(tmp) / "config.plist"
+                if isinstance(config, bytes):
+                    config_path.write_bytes(config)
+                else:
+                    with config_path.open("wb") as stream:
+                        plistlib.dump(config, stream)
+                argv += ["--config", str(config_path)]
+            with mock.patch.object(window, "Guest", FakeGuest), \
                 mock.patch.object(window, "Window", FakeWindow), \
                 mock.patch.object(window, "atlas_for", return_value="mock-atlas.rgba"), \
                 mock.patch.object(window, "log"), \
                 mock.patch.object(window.os, "getppid", side_effect=lambda: next(parent_ids)), \
-                mock.patch.object(window.sys, "argv", [str(MODULE_PATH), "/tmp/control.sock"]):
-            window.main()
+                mock.patch.object(window.sys, "argv", argv):
+                window.main()
 
         return events, windows[0], guests[0]
 
-    def test_phone_shows_toolbar_before_one_orientation_read_then_stops_polling(self):
+    def test_known_phone_shows_toolbar_without_orientation_polling(self):
         events, fake_window, guest = self.run_loop(
-            orientations=[{}], parent_ids=[77, 77, 77, 0]
+            orientations=[], parent_ids=[77, 77, 77, 0],
+            config={"guestProductType": "iPhone17,3"},
         )
 
         toolbar = next(i for i, event in enumerate(events) if event.startswith("toolbar "))
-        orientation = events.index("orientation")
-        self.assertLess(toolbar, orientation)
-        self.assertEqual(guest.reads, 1)
+        self.assertEqual(guest.reads, 0)
         self.assertEqual(fake_window.timeouts, [window.POLL, window.POLL])
         self.assertNotIn("fold", events[toolbar])
+
+    def test_cold_duo_shows_fold_before_hinge_is_configured_and_keeps_polling(self):
+        events, _, guest = self.run_loop(
+            orientations=[{"degrees": 0}, {"fold_angle": 90}, {"fold_angle": 90}],
+            parent_ids=[77, 77, 77, 77, 0],
+            config={"guestProductType": "iPhone19,4"},
+        )
+
+        first_toolbar = next(i for i, event in enumerate(events) if event.startswith("toolbar "))
+        self.assertIn(",fold", events[first_toolbar])
+        self.assertLess(first_toolbar, events.index("orientation"))
+        self.assertEqual(guest.reads, 3)
+        self.assertIn("rotate 90", events)
+
+    def test_unknown_product_can_discover_hinge_after_initial_angle_is_absent(self):
+        for config in (None, {}, {"guestProductType": ""},
+                       b'<?xml version="1.0"?><plist><dict>'):
+            with self.subTest(config=config):
+                events, _, guest = self.run_loop(
+                    orientations=[{"degrees": 0}, {"fold_angle": 90}, {"fold_angle": 90}],
+                    parent_ids=[77, 77, 77, 77, 0], config=config,
+                )
+
+                toolbars = [event for event in events if event.startswith("toolbar ")]
+                self.assertNotIn(",fold", toolbars[0])
+                self.assertIn(",fold", toolbars[-1])
+                self.assertEqual(guest.reads, 3)
+                self.assertIn("rotate 90", events)
 
     def test_duo_keeps_polling_and_adds_fold_after_orientation_is_known(self):
         events, _, guest = self.run_loop(
@@ -192,15 +230,16 @@ class WindowLoopTests(unittest.TestCase):
 
 
 class LauncherSocketTests(unittest.TestCase):
-    def test_launcher_preserves_control_socket_override_and_uses_default_when_absent(self):
-        for override in ("/tmp/custom-window-control.sock", None):
-            with self.subTest(override=override), tempfile.TemporaryDirectory() as tmp:
+    def test_launcher_passes_product_metadata_and_preserves_control_socket(self):
+        for override, product in (("/tmp/custom-window-control.sock", "iPhone19,4"),
+                                  (None, "iPhone17,3"), (None, None)):
+            with self.subTest(override=override, product=product), tempfile.TemporaryDirectory() as tmp:
                 temp = Path(tmp)
                 vm = temp / "vm"
                 vm.mkdir()
                 (vm / "ecid").write_text("0x1234\n")
                 with (vm / "config.plist").open("wb") as stream:
-                    plistlib.dump({}, stream)
+                    plistlib.dump({"guestProductType": product} if product else {}, stream)
 
                 bin_dir = temp / "bin"
                 bin_dir.mkdir()
@@ -209,10 +248,18 @@ class LauncherSocketTests(unittest.TestCase):
                 fake_python = bin_dir / "python3"
                 fake_python.write_text(
                     f"#!{sys.executable}\n"
-                    "import os, pathlib, sys\n"
+                    "import argparse, json, os, pathlib, plistlib, sys\n"
                     "if sys.argv[1].endswith('/tools/window/vphone-window.py'):\n"
-                    "    control = os.environ['REIMS_VGPU_WINDOW_CONTROL']\n"
-                    "    pathlib.Path(os.environ['WINDOW_CAPTURE']).write_text(control)\n"
+                    "    parser = argparse.ArgumentParser()\n"
+                    "    parser.add_argument('socket')\n"
+                    "    parser.add_argument('--cid', type=int)\n"
+                    "    parser.add_argument('--config')\n"
+                    "    args = parser.parse_args(sys.argv[2:])\n"
+                    "    with open(args.config, 'rb') as stream:\n"
+                    "        product = plistlib.load(stream).get('guestProductType')\n"
+                    "    record = dict(control=os.environ['REIMS_VGPU_WINDOW_CONTROL'],\n"
+                    "                  socket=args.socket, cid=args.cid, product=product)\n"
+                    "    pathlib.Path(os.environ['WINDOW_CAPTURE']).write_text(json.dumps(record))\n"
                     "else:\n"
                     f"    os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
                 )
@@ -240,6 +287,8 @@ class LauncherSocketTests(unittest.TestCase):
                     "WINDOW": "1",
                     "TOOLBAR": "1",
                     "CID": "314",
+                    "VSOCK": "vhost",
+                    "VSOCK_DIR": str(temp / "vsock"),
                     "MEM": "1M",
                     "VPHONE_CPUS": "",
                     "REIMS_VGPU_CENSUS_DIR": "",
@@ -259,7 +308,9 @@ class LauncherSocketTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
                 expected = override or str(temp / "vphone-window-314.sock")
-                self.assertEqual(window_capture.read_text(), expected)
+                self.assertEqual(json.loads(window_capture.read_text()), {
+                    "control": expected, "socket": expected, "cid": 314, "product": product,
+                })
                 self.assertEqual(qemu_capture.read_text(), expected)
 
 

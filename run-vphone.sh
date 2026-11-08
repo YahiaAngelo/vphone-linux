@@ -178,7 +178,7 @@ fi
 if [ "${GFX:-0}" = 1 ] && [ "${WINDOW:-0}" = 1 ] && [ "${TOOLBAR:-1}" = 1 ] && [ "$CID" != 0 ]; then
   export REIMS_VGPU_WINDOW_CONTROL=${REIMS_VGPU_WINDOW_CONTROL:-${XDG_RUNTIME_DIR:-/tmp}/vphone-window-$CID.sock}
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tools/window/vphone-window.py" \
-    "$REIMS_VGPU_WINDOW_CONTROL" --cid "$CID" &
+    "$REIMS_VGPU_WINDOW_CONTROL" --cid "$CID" --config "$VM/config.plist" &
 fi
 
 [ -n "${LOG:-}" ] && args+=(-D "$LOG")

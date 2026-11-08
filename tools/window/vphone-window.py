@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The VM window's companion: its button bar, and its rotation on a foldable guest.
 
-    tools/window/vphone-window.py SOCKET [--cid CID] [--px 48]
+    tools/window/vphone-window.py SOCKET [--cid CID] [--px 48] [--config CONFIG]
 
 run-vphone.sh starts it next to QEMU when the window is on (WINDOW=1), with SOCKET the window's
 control socket (REIMS_VGPU_WINDOW_CONTROL). It ends when QEMU does.
@@ -27,6 +27,7 @@ import datetime
 import json
 import math
 import os
+import plistlib
 import select
 import shutil
 import socket
@@ -34,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+from xml.parsers.expat import ExpatError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = 1339
@@ -255,11 +257,21 @@ def main():
     ap.add_argument("socket")
     ap.add_argument("--cid", type=int, default=int(os.environ.get("CID", 3)))
     ap.add_argument("--px", type=int, default=48)
+    ap.add_argument("--config", help="VM config.plist, for its guest product type")
     a = ap.parse_args()
 
     owner = os.getppid()   # run-vphone.sh, which execs QEMU: the same pid
     guest, win = Guest(a.cid), Window(a.socket)
-    foldable = None        # unknown until vphoned answers
+    foldable = None
+    if a.config:
+        try:
+            with open(a.config, "rb") as stream:
+                config = plistlib.load(stream)
+            product = config.get("guestProductType") if isinstance(config, dict) else None
+            if isinstance(product, str) and product:
+                foldable = product == "iPhone19,4"
+        except (OSError, ValueError, plistlib.InvalidFileException, ExpatError) as e:
+            log(f"could not read guest product type: {e}")
     sent_buttons, rotation, pending = None, None, None
 
     while os.getppid() == owner:
@@ -273,14 +285,14 @@ def main():
             sent_buttons = buttons
 
         o = guest.orientation() if foldable is not False else None
-        if o is not None and foldable is None:
-            foldable = "fold_angle" in o
-            log("foldable guest" if foldable else "guest is not foldable")
-            if foldable:
-                buttons = BASE_BUTTONS + ["fold"]
-                if win.sock and buttons != sent_buttons:
-                    win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
-                    sent_buttons = buttons
+        # The angle is absent until the hinge is first configured, even on a Duo.
+        if o is not None and foldable is None and "fold_angle" in o:
+            foldable = True
+            log("foldable guest")
+            buttons = BASE_BUTTONS + ["fold"]
+            if win.sock and buttons != sent_buttons:
+                win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
+                sent_buttons = buttons
 
         if foldable and o is not None and o.get("fold_angle") is not None:
             want = 90 if o["fold_angle"] >= 90 else 0
