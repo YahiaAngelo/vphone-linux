@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build the SSH ramdisk: the stock cloudOS restore ramdisk with the SSH tools from the staging tree
-# (tools/ssh-ramdisk-stage.sh) injected. The tools are not re-signed; tools/restore-tree-mode.sh adds
-# their code hashes to the trust cache and forces TXM's selector-24 check to pass.
+# (tools/ssh-ramdisk-stage.sh) injected. Downloaded tools retain their signatures;
+# the ECID bootstrap is source-built and ad-hoc signed. tools/restore-tree-mode.sh
+# adds their exact code hashes to the trust cache and forces TXM's selector-24 check to pass.
 #
 # Usage (as your normal user; it asks for sudo once, for the APFS mount):
 #   bash tools/ssh-ramdisk-rebuild-signed.sh <library> <vm>
@@ -35,6 +36,7 @@ fi
 for f in "$STOCK" "$BASE" "$STAGE/usr/local/bin/dropbear"; do
     [ -e "$f" ] || { echo "missing $f (staging tree: tools/ssh-ramdisk-stage.sh)" >&2; exit 1; }
 done
+python3 "$ROOT/tools/sshramdisk-bootstrap/check.py" "$STAGE/usr/local/bin/restored_external"
 
 echo "=== fresh APFS copy (stock base is left untouched)"
 rm -rf "$WORK"

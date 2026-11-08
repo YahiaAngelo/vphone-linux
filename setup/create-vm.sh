@@ -161,6 +161,12 @@ do_sanity() {
     [ -e "$one" ] || { warn "missing: $one — run ./setup.sh first"; missing=1; }
   done
   [ "$missing" = 0 ] || return 1
+  # Check before downloading firmware or restoring a VM, rather than at CFW.
+  if [ -n "${VPHONE_SSHRD_BOOTSTRAP:-}" ]; then
+    python3 "$T/sshramdisk-bootstrap/check.py" "$VPHONE_SSHRD_BOOTSTRAP"
+  else
+    "$T/sshramdisk-bootstrap/build.sh" --check
+  fi
   # The VM grows to 20-25 GB, firmware takes ~11 GB in the cache, and the restore tree
   # needs ~15 GB more while the VM is made: about 60 GB in all.
   check_vm_disk_space
@@ -394,6 +400,9 @@ do_cfw() {
   # checksummed (tools/ssh-ramdisk-stage.sh).
   if [ "$DRY" = 1 ] || [ ! -e "$VSETUP_SRC/runs/sshramdisk/ssh-root/usr/local/bin/dropbear" ]; then
     dry "$T/ssh-ramdisk-stage.sh"
+  else
+    # Upgrade cached staging trees that still advertise SSHRD's generic serial.
+    dry "$T/ssh-ramdisk-stage.sh" --bootstrap-only
   fi
   dry bash "$T/ssh-ramdisk-rebuild-signed.sh" "$VSETUP_DEVICES" "$NAME"
   dry "$T/restore-tree-mode.sh" "$VSETUP_DEVICES" "$NAME" ssh

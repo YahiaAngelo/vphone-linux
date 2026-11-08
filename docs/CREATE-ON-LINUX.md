@@ -201,14 +201,30 @@ mounts of sealed volumes. So the guest's own kernel mounts its volumes from an S
 (right after step 3):
 
 ```sh
+# Source build: requires clang, rcodesign, and xtool's installed Darwin SDK bundle.
+export DARWIN_SDK_BUNDLE="$HOME/.swiftpm/swift-sdks/darwin.artifactbundle"
 tools/ssh-ramdisk-stage.sh                              # -> runs/sshramdisk/ssh-root
 bash tools/ssh-ramdisk-rebuild-signed.sh vms myphone    # -> runs/sshramdisk/out/094-39914-031.dmg (asks for sudo once)
 ```
 
+Set `SDKROOT`, `LD64_LLD`, or `RCODESIGN` when those tools live elsewhere. A prebuilt
+bootstrap can replace the source build with `VPHONE_SSHRD_BOOTSTRAP=/path/to/bootstrap`.
+Staging checks its arm64 iOS architecture, ad-hoc signing identifier, executable page
+hashes, and signed USB/watchdog/platform/network entitlements before copying it.
+Only use a bootstrap built from source you trust; ad-hoc signing does not identify its publisher.
+Build one explicitly with `tools/sshramdisk-bootstrap/build.sh /path/to/bootstrap`.
+No Apple SDK or signer is needed when staging a valid prebuilt bootstrap.
+
 - `ssh-ramdisk-stage.sh` downloads the SSH tools (dropbear, bash, coreutils, sftp-server for iOS)
   from SSHRD_Script's [sshtars](https://github.com/verygenericname/sshtars) at a pinned commit,
-  checks their SHA-256, and unpacks them. This repository doesn't redistribute them. They are not
-  re-signed: the trust cache built in the next step admits them as they ship.
+  checks their SHA-256, and unpacks them. This repository doesn't redistribute them. Downloaded
+  tools retain their signatures, except `restored_external`, which is replaced by the signed
+  source-built bootstrap. It reads the guest's exact nonzero eight-byte `/chosen/unique-chip-id`
+  and advertises its canonical ECID instead of SSHRD's shared build-date serial. Missing or
+  malformed identity stops initialization. The host's strict `VPHONE_ECID` selector stays enabled.
+  The trust cache built in the next step admits the exact staged code hashes.
+- For an existing staging tree, run `tools/ssh-ramdisk-stage.sh --bootstrap-only` before rebuilding
+  the image and trust cache. Automated creation performs this upgrade on every CFW attempt.
 - `ssh-ramdisk-rebuild-signed.sh` saves the tree's stock restore ramdisk to `runs/sshramdisk/` the
   first time, mounts a copy of its APFS volume (root, linux-apfs-rw), adds the tools, and repacks it.
 - The tested ramdisk also carried a PRNG seeder (`prng_seedctl`), which exited without effect; the
