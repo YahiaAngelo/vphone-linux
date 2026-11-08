@@ -237,7 +237,7 @@ jobs:
       - name: Install the suite's dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck jq git python3-yaml curl unzip
+          sudo apt-get install -y shellcheck jq git python3-yaml curl unzip zip
       - name: Run test/smoke.sh (everything, one shot)
         env:
           # a clean isolated work area; no network needed, nothing boots
