@@ -50,6 +50,8 @@ run_private_init() (
   local kind=$1 binary=$2 base="$test_root/$1"
   export XDG_DATA_HOME="$base/xdg-data" XDG_CONFIG_HOME="$base/xdg-config" TMPDIR="$base/tmp"
   export SWIFTLY_HOME_DIR="$base/private-home"
+  # A developer shell may export the real install's toolchain directory; keep it out.
+  unset SWIFTLY_TOOLCHAINS_DIR
   if [[ $kind == stub ]]; then
     unset SWIFTLY_BIN_DIR
   else
