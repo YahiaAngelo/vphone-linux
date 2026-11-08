@@ -234,6 +234,8 @@ jobs:
     needs: [lint, data]
     steps:
       - uses: actions/checkout@v4
+      - name: First-boot QMP launcher regression (no VM)
+        run: bash setup/test/first-boot-qmp.sh
       - name: Install the suite's dependencies
         run: |
           sudo apt-get update

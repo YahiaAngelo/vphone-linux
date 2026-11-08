@@ -469,7 +469,12 @@ boot_vm() {
   if running_vm; then
     log "  this VM is already running (QEMU pid $QEMU_PID): waiting for vphoned"
   else
-    GFX=${GFX:-1} WINDOW=${WINDOW:-1} CID=$CID "$QEMU_RUN" "$VM" > "$VM/serial.log" 2>&1 &
+    local qmp_socket=${VPHONE_FIRST_BOOT_QMP:-}
+    local -a qmp_args=()
+    if [ -n "$qmp_socket" ]; then
+      qmp_args=(-qmp "unix:$qmp_socket,server=on,wait=off")
+    fi
+    GFX=${GFX:-1} WINDOW=${WINDOW:-1} CID=$CID "$QEMU_RUN" "$VM" "${qmp_args[@]}" > "$VM/serial.log" 2>&1 &
     QEMU_PID=$!
     printf '%s\n' "$QEMU_PID" > "$QEMU_PIDFILE"
     log "  QEMU output → $VM/serial.log; waiting for vphoned"
