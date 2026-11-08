@@ -25,8 +25,10 @@ files listed in `excludes/`, plus:
 with swiftly (Arch and other unsupported distros use swiftly's `ubi9` platform) and runs it by its full
 path, so you don't need to source swiftly's `env.sh` and its `clang`/`lld` stay off your PATH. Extra
 arguments go to `swift build`; use `./build.sh -c debug` to build the Debug product explicitly.
-`VPHONE_CLI=DIR` builds against an existing vphone-cli checkout. The wrapper does not build or install
-Swift when the Release product is missing; run `./build.sh --configuration release` first.
+`VPHONE_CLI=DIR` builds against an existing vphone-cli checkout. The wrapper prefers Release and
+warns before using an existing Debug product when Release is absent. It does not build or install
+Swift during an invocation. If neither product exists, run `./build.sh --configuration release`.
+To run Debug when both products exist, use its `.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli` path.
 
 Re-run `build.sh` after changing anything in `overlay/`, `edits/` or `excludes/`, or after moving
 the vphone-cli checkout to another tag.

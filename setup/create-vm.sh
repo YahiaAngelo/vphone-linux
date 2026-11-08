@@ -146,7 +146,13 @@ log "iOS:     $IOS (build $PAIR_BUILD)   cloudOS: $PAIR_CLOUDOS   preset: $PAIR_
 log "VM:      $VM   (scale ${SCALE}x, vsock CID $CID)"
 [ "$DRY" = 1 ] && log "DRY RUN: nothing below executes."
 
-export VC=${VC:-$VSETUP_SRC/linux-create/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli}
+cli_products=$VSETUP_SRC/linux-create/.build/out/out/Products
+cli_arch=$(uname -m)
+export VC=$cli_products/Release-linux-$cli_arch/vphone-cli
+if [ ! -x "$VC" ] && [ -x "$cli_products/Debug-linux-$cli_arch/vphone-cli" ]; then
+  VC=$cli_products/Debug-linux-$cli_arch/vphone-cli
+  warn "Release vphone-cli is not built. This invocation is using the existing Debug product: $VC"
+fi
 QEMU_RUN=$VSETUP_SRC/run-vphone.sh
 T=$VSETUP_SRC/tools
 ECID=$(cat "$VM/ecid" 2>/dev/null || echo 0x0)

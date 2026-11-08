@@ -39,7 +39,7 @@ expected=$(printf 'release-product\n<--probe>\n<two words>')
 [[ "$actual" == "$expected" ]] || fail "wrapper did not exec the Release product with unchanged arguments"
 printf 'ok: wrapper selects Release and preserves arguments\n'
 
-# A Debug fallback or implicit build would hide a missing Release build.
+# An existing Debug build remains usable during the Release transition.
 missing_root=$tmp/missing
 missing_dir=$missing_root/linux-create/.build/out/out/Products/Debug-linux-$machine
 mkdir -p "$missing_dir"
@@ -54,16 +54,23 @@ make_executable "$missing_root/linux-create/build.sh" <<'SCRIPT'
 set -euo pipefail
 printf called > "$VPHONE_TEST_BUILD_MARKER"
 SCRIPT
+VPHONE_TEST_BUILD_MARKER=$build_marker "$missing_root/linux-create/vphone-cli" --probe >"$tmp/missing.stdout" 2>"$tmp/missing.stderr"
+grep -Fxq 'debug-product' "$tmp/missing.stdout" || fail "wrapper did not fall back to the existing Debug product"
+grep -Fq 'using the existing Debug product' "$tmp/missing.stderr" || fail "Debug fallback warning was not printed"
+[[ ! -e "$build_marker" ]] || fail "wrapper tried to build the product on invocation"
+printf 'ok: wrapper warns and uses an existing Debug product without rebuilding\n'
+
+rm "$missing_dir/vphone-cli"
 if VPHONE_TEST_BUILD_MARKER=$build_marker "$missing_root/linux-create/vphone-cli" --probe >"$tmp/missing.stdout" 2>"$tmp/missing.stderr"; then
-  fail "wrapper unexpectedly succeeded without the Release product"
+  fail "wrapper unexpectedly succeeded without a built product"
 else
   result=$?
 fi
-[[ $result == 127 ]] || fail "missing Release product returned $result instead of 127"
-grep -Fq 'Release vphone-cli is not built:' "$tmp/missing.stderr" || fail "missing Release message was not printed"
+[[ $result == 127 ]] || fail "missing products returned $result instead of 127"
+grep -Fq 'vphone-cli is not built:' "$tmp/missing.stderr" || fail "missing product message was not printed"
 grep -Fq 'From the vphone-linux checkout, run: ./linux-create/build.sh' "$tmp/missing.stderr" || fail "native build guidance was not printed"
 [[ ! -e "$build_marker" ]] || fail "wrapper tried to build the product on invocation"
-printf 'ok: missing Release product fails without building or falling back to Debug\n'
+printf 'ok: missing products fail without building\n'
 
 # Exercise build.sh with fake dependencies so configuration selection is tested without a Swift build.
 build_root=$tmp/build
@@ -81,6 +88,7 @@ cat >"$build_root/setup/lib/common.sh" <<'SCRIPT'
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
 distro_family() { printf 'debian'; }
+ensure_vphone_cli_source() { :; }
 SCRIPT
 cat >"$build_root/setup/lib/swift.sh" <<'SCRIPT'
 VPHONE_SWIFT_VERSION=6.4.1
@@ -130,3 +138,31 @@ grep -Fxq -- debug "$explicit_args" || fail "explicit Debug configuration was no
 [[ $(grep -Fxc -- --configuration "$explicit_args") == 0 ]] || fail "explicit Debug build also appended the Release default"
 grep -Fq "Debug-linux-$machine/vphone-cli" "$explicit_output" || fail "explicit Debug build logged the wrong product path"
 printf 'ok: build defaults to Release and honors explicit Debug configuration\n'
+
+# Exercise the actual creator's product selection without starting a VM.
+creator_root=$tmp/creator
+creator_release=$creator_root/linux-create/.build/out/out/Products/Release-linux-$machine/vphone-cli
+creator_debug=$creator_root/linux-create/.build/out/out/Products/Debug-linux-$machine/vphone-cli
+make_executable "$creator_debug" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+run_creator() {
+  env VSETUP_SRC="$creator_root" VSETUP_RELEASE="$tmp/release" VSETUP_DEVICES="$tmp/devices" \
+    IPSW_URL=https://example.invalid/phone.ipsw CLOUDOS_IPSW_URL=https://example.invalid/cloud.ipsw \
+    VC="$tmp/stale-cli" "$repo/setup/create-vm.sh" --dry-run -y --device iPhone17,3 --ios 26.6.2 --name test \
+    >"$tmp/creator.log" 2>&1 || { cat "$tmp/creator.log"; return 1; }
+}
+run_creator
+grep -Fq "VC=$creator_debug" "$tmp/creator.log" || fail "creator did not select the existing Debug product"
+grep -Fq 'using the existing Debug product' "$tmp/creator.log" || fail "creator did not warn about Debug fallback"
+if grep -Fq "$tmp/stale-cli" "$tmp/creator.log"; then
+  fail "creator retained an inherited VC override"
+fi
+make_executable "$creator_release" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+run_creator
+grep -Fq "VC=$creator_release" "$tmp/creator.log" || fail "creator did not prefer the Release product"
+printf 'ok: creator prefers Release, warns for Debug fallback, and ignores inherited VC\n'

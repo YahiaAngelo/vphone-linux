@@ -181,8 +181,9 @@ linux-create/build.sh      # fetches vphone-cli, installs Swift if needed, syncs
 linux-create/vphone-cli --help
 ```
 
-`linux-create/vphone-cli` runs the built Release tool; run `linux-create/build.sh` first if it is
-missing. The wrapper does not build or install Swift when invoked. Use it as
+`linux-create/vphone-cli` prefers the built Release tool. It warns and uses an existing Debug
+product if Release is absent. If neither exists, run `linux-create/build.sh` first.
+The wrapper does not build or install Swift when invoked. Use it as
 `sudo linux-create/vphone-cli ...` for the steps that need root.
 
 **vphone-cli's release files.** Download
