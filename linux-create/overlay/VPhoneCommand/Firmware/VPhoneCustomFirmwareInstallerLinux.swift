@@ -112,7 +112,7 @@ struct VPhoneLinuxGuestConnection {
         // server option instead; only ProxyCommand needs the checkout path.
         let quoted = connector.replacingOccurrences(of: "%", with: "%%")
             .replacingOccurrences(of: "'", with: "'\\''")
-        let proxy = "ProxyCommand=exec /usr/bin/python3 '\(quoted)' proxy 22"
+        let proxy = "ProxyCommand=/usr/bin/python3 '\(quoted)' proxy 22"
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: ",", with: "\\,")
         return ["-c", script, "vphone-sshfs", executable,

@@ -15,7 +15,7 @@ done
 exec /usr/bin/ssh \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null \
-  -o "ProxyCommand=exec /usr/bin/python3 '$proxy' proxy 22" \
+  -o "ProxyCommand=/usr/bin/python3 '$proxy' proxy 22" \
   -o PreferredAuthentications=password \
   -o NumberOfPasswordPrompts=1 \
   "${args[@]}" /usr/libexec/sftp-server

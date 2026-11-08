@@ -25,7 +25,7 @@ export SSH_ASKPASS_REQUIRE=force
 setsid -w ssh \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
-    -o "ProxyCommand=exec /usr/bin/python3 '$proxy' proxy 22" \
+    -o "ProxyCommand=/usr/bin/python3 '$proxy' proxy 22" \
     -o NumberOfPasswordPrompts=1 \
     -o ConnectTimeout=15 \
     -o PreferredAuthentications=password,keyboard-interactive \

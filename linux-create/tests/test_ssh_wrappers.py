@@ -21,9 +21,9 @@ SSH = r'''
 import json, os, pathlib, stat, subprocess, sys
 args = sys.argv[1:]
 proxy = next(value.split('=', 1)[1] for value in args if value.startswith('ProxyCommand='))
-# OpenSSH's percent expansion precedes shell parsing. Only %% may appear
+# OpenSSH adds exec before percent expansion and shell parsing. Only %% may appear
 # in this literal path; any accidentally unescaped %h would change it.
-expanded = ''
+expanded = 'exec '
 i = 0
 while i < len(proxy):
     if proxy[i] == '%':

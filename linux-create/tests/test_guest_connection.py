@@ -161,21 +161,24 @@ do {
                 # SSHFS 3.7.3 forwards recognized SSH options as -o plus the
                 # decoded value. This connector stub performs no network or USB I/O.
                 proxy = config.proxy.decode()
-                self.assertTrue(proxy.startswith("exec /usr/bin/python3 '"),
+                self.assertTrue(proxy.startswith("/usr/bin/python3 '"),
                                 "Refusing to launch OpenSSH without the local connector stub")
-                completed = subprocess.run([
-                    "/usr/bin/ssh", "-F", "/dev/null", "-o", "IdentityAgent=none",
-                    "-o", "IdentityFile=/dev/null", "-o", "UserKnownHostsFile=/dev/null",
-                    "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ProxyCommand=" + proxy,
-                    "-o", "ConnectTimeout=2", "root@guest-free.invalid", "sync",
-                ], cwd=root, env=os.environ | result["environment"] | {"CAPTURE": str(capture)},
-                   capture_output=True, text=True, timeout=5)
-                self.assertNotEqual(completed.returncode, 0)
-                self.assertTrue(capture.exists(),
-                                f"Local connector did not run (ssh exit {completed.returncode}).\n"
-                                f"stdout: {completed.stdout}\nstderr: {completed.stderr}")
-                self.assertEqual(json.loads(capture.read_text()), {"args": ["proxy", "22"], "ecid": "0000000000001234"})
-                self.assertFalse((root / "PWNED").exists())
+                for shell in ("/bin/bash", "/bin/sh"):
+                    with self.subTest(shell=shell):
+                        capture.unlink(missing_ok=True)
+                        completed = subprocess.run([
+                            "/usr/bin/ssh", "-F", "/dev/null", "-o", "IdentityAgent=none",
+                            "-o", "IdentityFile=/dev/null", "-o", "UserKnownHostsFile=/dev/null",
+                            "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ProxyCommand=" + proxy,
+                            "-o", "ConnectTimeout=2", "root@guest-free.invalid", "sync",
+                        ], cwd=root, env=os.environ | result["environment"] | {"CAPTURE": str(capture), "SHELL": shell},
+                           capture_output=True, text=True, timeout=5)
+                        self.assertNotEqual(completed.returncode, 0)
+                        self.assertTrue(capture.exists(),
+                                        f"Local connector did not run (shell {shell}, ssh exit {completed.returncode}).\n"
+                                        f"stdout: {completed.stdout}\nstderr: {completed.stderr}")
+                        self.assertEqual(json.loads(capture.read_text()), {"args": ["proxy", "22"], "ecid": "0000000000001234"})
+                        self.assertFalse((root / "PWNED").exists())
             finally:
                 fuse.fuse_opt_free_args(ctypes.byref(arguments))
 
