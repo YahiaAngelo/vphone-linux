@@ -1,5 +1,6 @@
 #if os(Linux)
 import ArgumentParser
+import CoreFoundation
 import Foundation
 import Glibc
 import FirmwarePatcher
@@ -52,6 +53,73 @@ func rcodesignPath() -> String {
     return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "rcodesign"
 }
 
+struct VPhoneLinuxGuestConnection {
+    let ecid: String
+    let system: String
+    let xart: String
+    let preboot: String
+
+    init(bundleConfiguration: Data, environment: [String: String]) throws {
+        guard let config = try PropertyListSerialization.propertyList(
+            from: bundleConfiguration, format: nil) as? [String: Any],
+            let identifier = config["machineIdentifier"] as? Data,
+            let identity = try PropertyListSerialization.propertyList(
+                from: identifier, format: nil) as? [String: Any],
+            let number = identity["ECID"] as? NSNumber,
+            CoreFoundation.CFGetTypeID(number) != CoreFoundation.CFBooleanGetTypeID(),
+            let selected = UInt64(number.stringValue), selected != 0
+        else {
+            throw ValidationError("The selected VM's config.plist has no valid machine ECID; refusing to connect to an unbound CFW target.")
+        }
+        if let override = environment["VPHONE_ECID"] {
+            let digits = override.lowercased().hasPrefix("0x") ? String(override.dropFirst(2)) : override
+            guard (1...16).contains(digits.count),
+                digits.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+                let value = UInt64(digits, radix: 16), value == selected
+            else {
+                throw ValidationError("VPHONE_ECID must match the selected VM's machine ECID; refusing a conflicting CFW target.")
+            }
+        }
+        ecid = String(format: "%016llX", selected)
+        func path(_ key: String, fallback: String) throws -> String {
+            let value = environment[key] ?? fallback
+            guard value.hasPrefix("/"), !value.utf8.contains(0) else {
+                throw ValidationError("\(key) must be an absolute guest path without NUL bytes.")
+            }
+            return value
+        }
+        system = try path("VPHONE_GUEST_SYSTEM", fallback: "/mnt1")
+        xart = try path("VPHONE_GUEST_XART", fallback: "/mnt7")
+        preboot = try path("VPHONE_GUEST_PREBOOT", fallback: "/mnt6")
+    }
+
+    func environment(_ inherited: [String: String], askpass: String) -> [String: String] {
+        var result = inherited
+        result["VPHONE_ECID"] = ecid
+        result["SSH_ASKPASS"] = askpass
+        result["SSH_ASKPASS_REQUIRE"] = "force"
+        result["DISPLAY"] = ":0"
+        return result
+    }
+
+    static func mountArguments(
+        hostPath: String, guestPath: String, connector: String,
+        executable: String = "/usr/bin/sshfs"
+    ) -> [String] {
+        // Keep the launch behavior, but never parse caller paths as shell code.
+        let script = #"printf 'alpine\n' | "$1" -f "$2" "$3" -o ssh_command=/usr/bin/ssh -o sftp_server=/usr/libexec/sftp-server -o "$4" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o NumberOfPasswordPrompts=1 -o reconnect -o ServerAliveInterval=15 -o password_stdin &"#
+        // SSHFS 3.7.3 does not unescape ssh_command paths. Use its native SFTP
+        // server option instead; only ProxyCommand needs the checkout path.
+        let quoted = connector.replacingOccurrences(of: "%", with: "%%")
+            .replacingOccurrences(of: "'", with: "'\\''")
+        let proxy = "ProxyCommand=/usr/bin/python3 '\(quoted)' proxy 22"
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: ",", with: "\\,")
+        return ["-c", script, "vphone-sshfs", executable,
+                "root@vphone:\(guestPath)", hostPath, proxy]
+    }
+}
+
 extension VPhoneCustomFirmwareInstaller {
     func runLinuxGuest(
         bundleDirectory: VPhoneConfinedDirectory,
@@ -67,8 +135,15 @@ extension VPhoneCustomFirmwareInstaller {
     ) throws {
         _ = bundlePath
         _ = receipt
+        let env = ProcessInfo.processInfo.environment
+        let connection = try VPhoneLinuxGuestConnection(
+            bundleConfiguration: bundleDirectory.readData("config.plist"), environment: env)
         let work = try makeWorkDirectory()
         defer { try? removeWorkDirectory(work) }
+        let askpass = work.file("ssh-askpass.sh")
+        try work.directory.writeFile(
+            "ssh-askpass.sh", contents: Data("#!/bin/sh\necho alpine\n".utf8), mode: 0o700)
+        let mountEnvironment = connection.environment(env, askpass: askpass.path)
 
         let system = work.file("system")
         let xart = work.file("xart")
@@ -89,10 +164,9 @@ extension VPhoneCustomFirmwareInstaller {
         // Where the ramdisk mounted each volume. The guest's mount_filesystems mounts by
         // role (System /mnt1, Preboot /mnt6, xART /mnt7 on the 2026-10-24 OpenAVB restore),
         // and the device numbers differ between restores, so they can be overridden.
-        let env = ProcessInfo.processInfo.environment
-        try mountRemote(system, guestPath: env["VPHONE_GUEST_SYSTEM"] ?? "/mnt1")
-        try mountRemote(xart, guestPath: env["VPHONE_GUEST_XART"] ?? "/mnt7")
-        try mountRemote(preboot, guestPath: env["VPHONE_GUEST_PREBOOT"] ?? "/mnt6")
+        try mountRemote(system, guestPath: connection.system, environment: mountEnvironment)
+        try mountRemote(xart, guestPath: connection.xart, environment: mountEnvironment)
+        try mountRemote(preboot, guestPath: connection.preboot, environment: mountEnvironment)
 
         print("[*] opening mounted volumes")
         let systemRoot = try work.directory.mountedVolume("system")
@@ -215,8 +289,8 @@ extension VPhoneCustomFirmwareInstaller {
         print("[+] Linux guest install complete")
     }
 
-    /// Mount a guest path on the host over sshfs.  The wrapper drops the
-    /// unsupported `-s sftp` request and runs /usr/libexec/sftp-server instead.
+    /// Mount a guest path over sshfs with an absolute SFTP server command,
+    /// since the SSH ramdisk's dropbear has no SFTP subsystem.
     ///
     /// sshfs -f stays in the foreground, so Process.run() returns without
     /// waiting; poll mountinfo for the kernel to publish the mount.  (Waiting
@@ -226,25 +300,15 @@ extension VPhoneCustomFirmwareInstaller {
     /// mount that takes 0.1 s on localhost can take tens of seconds here.  We
     /// deliberately do *not* kill the wrapper on timeout: a late mount is still
     /// usable, and killing the shell orphans sshfs in a busy FUSE state.
-    private func mountRemote(_ hostPath: URL, guestPath: String) throws {
-        // tools/ssh-ramdisk.sh creates this; the installer must not depend on it
-        // having been run first.
-        let askpass = "/tmp/vphone-askpass.sh"
-        if !FileManager.default.fileExists(atPath: askpass) {
-            try? "#!/bin/sh\necho alpine\n".write(toFile: askpass, atomically: true, encoding: .utf8)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askpass)
-        }
-        setenv("SSH_ASKPASS", askpass, 1)
-        setenv("SSH_ASKPASS_REQUIRE", "force", 1)
-        setenv("DISPLAY", ":0", 1)
+    private func mountRemote(_ hostPath: URL, guestPath: String, environment: [String: String]) throws {
         // Launch through a shell, backgrounded, like the manual command that
         // does mount. Direct Process execution of sshfs has not mounted here.
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let script = "printf 'alpine\\n' | /usr/bin/sshfs -f 'root@vphone:\(guestPath)' '\(hostPath.path)' "
-            + "-o ssh_command='\(vphoneLinuxRoot())/tools/sshfs-remote-sftp.sh' "
-            + "-o reconnect -o ServerAliveInterval=15 -o password_stdin &"
-        process.arguments = ["-c", script]
+        process.arguments = VPhoneLinuxGuestConnection.mountArguments(
+            hostPath: hostPath.path, guestPath: guestPath,
+            connector: "\(vphoneLinuxRoot())/tools/usbmux-connect.py")
+        process.environment = environment
         // Inherit stderr: piping it from a daemonizing sshfs can block forever.
         print("[*] sshfs \(guestPath) -> \(hostPath.path)")
         try process.run()

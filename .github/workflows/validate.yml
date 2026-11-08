@@ -45,6 +45,20 @@ jobs:
           tar -xzf "$archive" -C "$task_root" swiftly
           bash setup/test/swiftly-private-prefix.sh "$task_root/swiftly"
 
+  cfw-connection:
+    name: CFW connection construction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install local transport test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev openssh-client
+      - name: Compile and check literal connection arguments
+        run: |
+          swiftc --version
+          uv run --python 3.12 linux-create/tests/test_guest_connection.py
+          uv run --python 3.12 linux-create/tests/test_ssh_wrappers.py
+
   lint:
     name: shellcheck + syntax
     runs-on: ubuntu-latest
