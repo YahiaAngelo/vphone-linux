@@ -14,11 +14,13 @@ set -Eeuo pipefail
 # shellcheck disable=SC1091  # this checkout's own lib/common.sh, resolved at run time
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-# Timeouts and helper readiness are configurable by vphone-linux callers.
+# Timeouts (seconds) and helper readiness are configurable by vphone-linux callers. The defaults
+# leave room for slow hosts (WSL, software rendering): the first-boot data migration has taken over
+# 2 h there (#17), so it has no limit unless VPHONE_MIGRATION_TIMEOUT sets one (0 = none).
 VPHONE_CREATOR_USB_READY=${VPHONE_CREATOR_USB_READY:-0}
-VPHONE_FIRST_BOOT_TIMEOUT=${VPHONE_FIRST_BOOT_TIMEOUT:-600}
-VPHONE_SHUTDOWN_TIMEOUT=${VPHONE_SHUTDOWN_TIMEOUT:-120}
-VPHONE_MIGRATION_TIMEOUT=${VPHONE_MIGRATION_TIMEOUT:-3600}
+VPHONE_FIRST_BOOT_TIMEOUT=${VPHONE_FIRST_BOOT_TIMEOUT:-1800}
+VPHONE_SHUTDOWN_TIMEOUT=${VPHONE_SHUTDOWN_TIMEOUT:-600}
+VPHONE_MIGRATION_TIMEOUT=${VPHONE_MIGRATION_TIMEOUT:-0}
 
 DEVICE=${DEVICE:-} IOS=${IOS:-} CLOUDOS_PICK=${CLOUDOS_PICK:-}
 SCALE=${SCALE:-1} NAME=${NAME:-} DRY=0 LIST=0 CID=${CID:-3} TRIM=${TRIM:-0}
@@ -537,7 +539,9 @@ do_first_boot() {
   fi
   log "  the first boot migrates iOS's data behind an Apple logo and progress bar (20+ min)"
   boot_vm
-  local deadline=$((SECONDS + VPHONE_MIGRATION_TIMEOUT)) remaining
+  local limit=$VPHONE_MIGRATION_TIMEOUT remaining
+  [ "$limit" -gt 0 ] || limit=$((100 * 24 * 3600))   # 0: no limit
+  local deadline=$((SECONDS + limit))
   while true; do
     remaining=$((deadline - SECONDS))
     [ "$remaining" -gt 0 ] || die "first-boot migration timed out; see $VM/serial.log"

@@ -60,14 +60,16 @@ run_shutdown_timeout() (
 )
 
 run_migration_timeout() (
-  DRY=0 VPHONE_MIGRATION_TIMEOUT=0
+  # 0 means no limit, so give it one second and let the first poll take two.
+  DRY=0 VPHONE_MIGRATION_TIMEOUT=1
   VM=/unused DEVICE=iPhone17,3 IOS=27.1 PAIR_BUILD=22C T=/unused
   log() { :; }
   die() { printf '%s\n' "$*" >&2; exit 1; }
   boot_vm() { :; }
-  vrpc() { return 0; }
-  qemu_alive() { return 1; }
+  vrpc() { SECONDS=$((SECONDS + 2)); return 0; }
+  qemu_alive() { return 0; }
   qemu_exit_report() { :; }
+  sleep() { :; }
   python3() {
     [ "${2:-}" = expected-build ] && { printf '22C\n'; return 0; }
     return 1
