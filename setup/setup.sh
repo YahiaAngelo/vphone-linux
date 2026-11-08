@@ -216,8 +216,8 @@ build_qemu() {
     ninja qemu-system-aarch64 )
 }
 build_creator() {
-  log " Building vphone-cli's firmware tooling for Linux (source $VPHONE_CLI_REF)"
-  local src="$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_VERSION"
+  local src=${VPHONE_CLI:-$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_VERSION}
+  log " Building vphone-cli's firmware tooling for Linux from $src"
   ensure_vphone_cli_source "$src"
   VPHONE_CLI="$src" "$VSETUP_SRC/linux-create/build.sh"
 }

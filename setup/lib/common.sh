@@ -38,13 +38,21 @@ check_vm_disk_space() {
 }
 
 ensure_vphone_cli_source() {
-  local src=$1 fresh=0 actual expected origin
+  local src=$1 fresh=0 actual expected origin selected_origin tag
+  local fetch_args=()
+  if [ -n "${VPHONE_CLI:-}" ]; then
+    [ -d "$src" ] || die "no vphone-cli checkout at $src"
+    return 0
+  fi
   [[ -n $VPHONE_CLI_REF && $VPHONE_CLI_REF != -* ]] || die "invalid VPHONE_CLI_REF"
   if [ -e "$src" ] || [ -L "$src" ]; then
     [ "$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" = "$(realpath "$src")" ] ||
       die "not a vphone-cli checkout: $src; preserve it and select another source directory"
     origin=$(git -C "$src" remote get-url origin 2>/dev/null) || die "source checkout has no origin: $src"
-    [ "$origin" = "$VPHONE_CLI_REPO" ] || die "source origin differs from VPHONE_CLI_REPO: $src"
+    selected_origin=$VPHONE_CLI_REPO
+    while [[ $origin == */ ]]; do origin=${origin%/}; done
+    while [[ $selected_origin == */ ]]; do selected_origin=${selected_origin%/}; done
+    [ "${origin%.git}" = "${selected_origin%.git}" ] || die "source origin differs from VPHONE_CLI_REPO: $src"
     [ -z "$(git -C "$src" status --porcelain)" ] ||
       die "source checkout has local changes: $src; preserve them before building a pinned ref"
   else
@@ -54,12 +62,19 @@ ensure_vphone_cli_source() {
     git -C "$src" remote add origin "$VPHONE_CLI_REPO" || die "cannot configure source origin: $src"
     fresh=1
   fi
+  tag=${VPHONE_CLI_REF#refs/tags/}
   if [[ $VPHONE_CLI_REF =~ ^[[:xdigit:]]{40}$ ]] &&
      expected=$(git -C "$src" rev-parse --verify --end-of-options "$VPHONE_CLI_REF^{commit}" 2>/dev/null); then
     : # Reuse an already fetched immutable commit without a network request.
+  elif [[ ! $VPHONE_CLI_REF =~ ^[[:xdigit:]]{40}$ && $VPHONE_CLI_REF != refs/heads/* ]] &&
+       expected=$(git -C "$src" rev-parse --verify --end-of-options "refs/tags/$tag^{commit}" 2>/dev/null); then
+    : # A locally resolved tag can also be rebuilt offline.
   else
     log "Fetching vphone-cli source $VPHONE_CLI_REF"
-    git -C "$src" fetch --depth 1 origin "$VPHONE_CLI_REF" || die "cannot fetch source ref $VPHONE_CLI_REF"
+    [ "$fresh" = 0 ] || fetch_args+=(--depth 1)
+    git -C "$src" fetch "${fetch_args[@]}" \
+      --refmap='refs/tags/*:refs/tags/*' --refmap='+refs/heads/*:refs/remotes/origin/*' \
+      origin "$VPHONE_CLI_REF" || die "cannot fetch source ref $VPHONE_CLI_REF"
     expected=$(git -C "$src" rev-parse --verify 'FETCH_HEAD^{commit}') || die "fetched source is not a commit"
   fi
   if [ "$fresh" = 1 ]; then
