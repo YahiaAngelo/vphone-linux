@@ -31,8 +31,8 @@ Non-interactive:
 
 | Device | iOS | cloudOS | Preset | State |
 |---|---|---|---|---|
-| `iPhone17,3` (iPhone 16 Pro) | **26.6.2** (23G90) | `26.4-23E5207q` | standard | end-to-end: home screen |
-| `iPhone17,3` (iPhone 16 Pro) | **27.0.1** (24A446) | `26.4-23E5207q` | standard | end-to-end with create-vm.sh: home screen at 2x |
+| `iPhone17,3` (iPhone 16) | **26.6.2** (23G90) | `26.4-23E5207q` | standard | end-to-end: home screen |
+| `iPhone17,3` (iPhone 16) | **27.0.1** (24A446) | `26.4-23E5207q` | standard | end-to-end with create-vm.sh: home screen at 2x |
 | `iPhone19,4` (iPhone Duo) | **27.1** (24A94425) | `26.4-23E5207q` | standard | home screen (keep at 3x) |
 
 iOS 27 pairings need this repo's QEMU (it implements FEAT_CSSC — without it the
@@ -65,7 +65,7 @@ macOS kmutil (refused here).
 and menus down to one of the tested pairings — e.g.
 
 ```text
-iPhone17,3 (iPhone 16 Pro)
+iPhone17,3 (iPhone 16)
   iOS 26.6.2 | build 23G90 | cloudOS 26.4-23E5207q | standard | linux-tested recommended
   iOS 27.0.1 | build 24A446 | cloudOS 26.4-23E5207q | standard | linux-tested mac-tested
 iPhone18,2 (iPhone 17 Pro Max)

@@ -8,7 +8,7 @@
   "devices": [
     {
       "id": "iPhone17,3",
-      "name": "iPhone 16 Pro",
+      "name": "iPhone 16",
       "note": "The reference device: newest cloudOS that still carries the vphone600ap identity the guest firmware comes from is 26.4-23E5207q."
     },
     {
@@ -40,7 +40,7 @@
     },
     {
       "id": "iPad16,1",
-      "name": "iPad Pro 11-inch"
+      "name": "iPad mini (A17 Pro)"
     },
     {
       "id": "Watch7,18",
