@@ -9,8 +9,10 @@ Example:
   usbip list -r 127.0.0.1
   sudo usbip attach -r 127.0.0.1 -b 1-1
 
-The guest must be in recovery/DFU mode and have presented its USB device before
-the bridge starts. USB/IP listens on 127.0.0.1:3240 by default.
+Initial discovery waits at most five minutes for the guest's USB descriptors,
+including retries after a guest-driver reset on the same chardev connection.
+A closed chardev or invalid protocol response stops the exporter. USB/IP listens
+on 127.0.0.1:3240 by default.
 """
 
 import argparse
@@ -753,17 +755,45 @@ async def main_async(args):
     pump = asyncio.create_task(usb.run())
     try:
         bridge = USBIPBridge(usb)
+
+        def ensure_transport():
+            if pump.done():
+                log(f"USB chardev stopped during initial discovery: {pump.exception() or 'connection closed'}")
+                pump.result()
+                raise ConnectionError("USB chardev closed during initial discovery")
+
         # OpenAVB's DFU answers the control reset late (SEP bootstrap first):
-        # retry for a while instead of giving up after CTRL_TIMEOUT.
+        # let later resets use the remaining startup budget, including descriptor reads.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + STAGE_TIMEOUT
         for attempt in range(60):
+            ensure_transport()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("USB device never became ready during initial discovery")
+            usb.detached.clear()
             try:
-                await bridge.discover(reset_timeout=STAGE_TIMEOUT if attempt else CTRL_TIMEOUT)
+                await asyncio.wait_for(bridge.discover(
+                    reset_timeout=min(remaining, STAGE_TIMEOUT if attempt else CTRL_TIMEOUT)
+                ), remaining)
+                if usb.detached.is_set():
+                    raise OSError(errno.ENODEV, "guest driver reset during discovery")
+                ensure_transport()
                 break
-            except asyncio.TimeoutError:
-                log(f"DFU not ready for the control reset (attempt {attempt + 1}); retrying")
-                await asyncio.sleep(1)
+            except (asyncio.TimeoutError, OSError) as error:
+                if not isinstance(error, asyncio.TimeoutError) and error.errno != errno.ENODEV:
+                    raise
+                ensure_transport()
+                bridge.device_record = None
+                bridge.interfaces = []
+                bridge.endpoint_sizes = {}
+                bridge.pid = None
+                bridge.pci_stage = False
+                reason = "guest driver reset" if error.errno == errno.ENODEV else "device not ready"
+                log(f"USB {reason} during initial discovery (attempt {attempt + 1}); retrying")
+                await asyncio.sleep(min(1, max(0, deadline - loop.time())))
         else:
-            raise asyncio.TimeoutError("DFU never answered the control reset")
+            raise asyncio.TimeoutError("USB device never became ready during initial discovery")
         follower = asyncio.create_task(bridge.follow_stages())
         server = await asyncio.start_server(bridge.handle_connection,
                                             args.host, args.port)
