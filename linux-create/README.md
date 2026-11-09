@@ -32,12 +32,21 @@ To run Debug when both products exist, use its `.build/out/out/Products/Debug-li
 
 `VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
 commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).
-`VPHONE_CLI_PUBLIC` selects the public guest-resource release independently. For example:
+`VPHONE_CLI_PUBLIC` selects the public guest-resource release independently.
+
+The managed source directory is `../cpu-tree/vphone-cli-$VPHONE_CLI_VERSION`. Changing the repository
+or ref does not select a different directory. If that checkout already exists, clone the desired
+source into a new directory and use `VPHONE_CLI` instead. From `linux-create/`, replace the example
+repository URL and full commit below with your selection:
 
 ```sh
-VPHONE_CLI_REPO=https://github.com/example/vphone-cli.git \
-VPHONE_CLI_REF=0123456789abcdef0123456789abcdef01234567 ./build.sh
+git clone --no-checkout 'https://github.com/example/vphone-cli.git' '../vphone-cli-custom' &&
+  git -C '../vphone-cli-custom' checkout --detach '0123456789abcdef0123456789abcdef01234567' &&
+  VPHONE_CLI='../vphone-cli-custom' ./build.sh
 ```
+
+Choose a new directory for each repository/ref. The commands stop if cloning or checkout fails, so
+an existing source checkout is not changed by a failed clone.
 
 Managed source checkouts must have the selected origin and commit and no local changes. Origin
 comparison ignores a trailing `.git` and `/`. A mismatch stops the build and preserves the checkout.
