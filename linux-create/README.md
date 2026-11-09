@@ -27,6 +27,24 @@ path, so you don't need to source swiftly's `env.sh` and its `clang`/`lld` stay 
 arguments go to `swift build` (for example `./build.sh -c release`). `VPHONE_CLI=DIR` builds against an
 existing vphone-cli checkout.
 
+`VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
+commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).
+`VPHONE_CLI_PUBLIC` selects the public guest-resource release independently. For example:
+
+```sh
+VPHONE_CLI_REPO=https://github.com/example/vphone-cli.git \
+VPHONE_CLI_REF=0123456789abcdef0123456789abcdef01234567 ./build.sh
+```
+
+Managed source checkouts must have the selected origin and commit and no local changes. Origin
+comparison ignores a trailing `.git` and `/`. A mismatch stops the build and preserves the checkout.
+An already fetched full commit or a locally resolved tag can be rebuilt without contacting its remote.
+Fetching a missing ref does not make an existing full clone shallow.
+
+`VPHONE_CLI=DIR` instead uses that existing source directory as supplied, including a fork or local
+edits. Setup and `build.sh` skip repository, ref and cleanliness checks for this explicit override.
+Neither mode resets an existing checkout or replaces its files.
+
 Re-run `build.sh` after changing anything in `overlay/`, `edits/` or `excludes/`, or after moving
 the vphone-cli checkout to another tag.
 

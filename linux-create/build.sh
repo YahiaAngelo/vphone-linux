@@ -16,13 +16,8 @@ source "$here/../setup/lib/swift.sh"
 
 [ "$(id -u)" != 0 ] || die "run this as your user, not root (the build tree would become root-owned)"
 
-src=${VPHONE_CLI:-$here/../cpu-tree/vphone-cli-$VPHONE_CLI_PUBLIC}
-if [ ! -d "$src/.git" ] && [ -z "${VPHONE_CLI:-}" ]; then
-  log "Cloning vphone-cli $VPHONE_CLI_PUBLIC into $src"
-  mkdir -p "$(dirname "$src")"
-  git clone --depth 1 --branch "$VPHONE_CLI_PUBLIC" "$VPHONE_CLI_REPO" "$src"
-fi
-[ -d "$src" ] || die "no vphone-cli checkout at $src"
+src=${VPHONE_CLI:-$here/../cpu-tree/vphone-cli-$VPHONE_CLI_VERSION}
+ensure_vphone_cli_source "$src"
 
 ensure_swift
 swift_check_libs
