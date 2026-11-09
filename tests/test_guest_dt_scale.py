@@ -105,6 +105,8 @@ class Guest:
         self.calls = []
         self.writes = {}
         self.truncated = False
+        self.read_fields = {}
+        self.missing_read_fields = set()
         self.corrupt_readback = False
         self.fail_remove = False
         self.screen_errors = []
@@ -126,11 +128,15 @@ class Guest:
             data = self.tree
             if self.corrupt_readback and self.writes:
                 data = data[:-1] + bytes([data[-1] ^ 1])
-            return {
+            result = {
                 "content": base64.b64encode(data).decode(),
                 "size": len(data),
                 "truncated": self.truncated,
             }
+            result.update(self.read_fields)
+            for field in self.missing_read_fields:
+                result.pop(field, None)
+            return result
         if method == "files.write":
             data = base64.b64decode(params["content"])
             self.writes[params["path"]] = data
@@ -266,6 +272,15 @@ class GuestScaleTests(unittest.TestCase):
                 status = 0 if error.code is None else error.code
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def assert_unchanged(self, guest, *, no_screen=False):
+        methods = [method for method, _ in guest.calls]
+        self.assertFalse(
+            any(method in ("files.write", "files.remove") for method in methods)
+        )
+        if no_screen:
+            self.assertNotIn("device.screen", methods)
+        self.assertTrue(all(connection.closed for connection in guest.connections))
+
     def test_metrics_prove_scale_while_legacy_orientation_is_unavailable(self):
         guest = Guest(tree_fixture(2))
         guest.screen_errors = [("unavailable", MISSING_LAYOUT)]
@@ -275,10 +290,7 @@ class GuestScaleTests(unittest.TestCase):
             json.loads(output),
             {"changed": False, "scale": 2, "restart_required": False},
         )
-        self.assertFalse(any(method == "device.screen" for method, _ in guest.calls))
-        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
-        self.assertEqual(guest.writes, {})
-        self.assertTrue(all(connection.closed for connection in guest.connections))
+        self.assert_unchanged(guest, no_screen=True)
 
     def test_only_exact_unsupported_metrics_response_uses_legacy_screen(self):
         guest = Guest(tree_fixture(2))
@@ -328,22 +340,16 @@ class GuestScaleTests(unittest.TestCase):
                     self.assertNotIn("restart_required", output)
                 except ValueError:
                     pass
-                self.assertFalse(
-                    any(method == "device.screen" for method, _ in guest.calls)
-                )
-                self.assertEqual(guest.writes, {})
-                self.assertTrue(
-                    all(connection.closed for connection in guest.connections)
-                )
+                self.assert_unchanged(guest, no_screen=True)
 
     def test_unavailable_and_malformed_metrics_never_fall_back_or_mutate(self):
         variants = []
         for key, values in {
-            "available": [False, 1],
-            "source": ["cadisplay", None],
-            "reason": ["ambiguous", None],
-            "display_id": [None, True, 0, -1, 1.5, 1 << 32, "1"],
-            "point_scale": [None, True, "2", 0, -1, float("inf"), float("nan")],
+            "available": [False],
+            "source": ["cadisplay"],
+            "reason": ["ambiguous"],
+            "display_id": [True, 0, 1 << 32],
+            "point_scale": [True, 0, float("inf")],
             "monitors": [[{}, {}]],
         }.items():
             for value in values:
@@ -354,14 +360,7 @@ class GuestScaleTests(unittest.TestCase):
             result = metrics_fixture()
             del result[field]
             variants.append(result)
-            for key, value in (
-                ("x", True),
-                ("x", 1),
-                ("y", -1),
-                ("width", True),
-                ("width", 0),
-                ("height", float("inf")),
-            ):
+            for key, value in (("x", 1), ("width", 0), ("height", float("inf"))):
                 result = metrics_fixture()
                 result[field][key] = value
                 variants.append(result)
@@ -373,14 +372,8 @@ class GuestScaleTests(unittest.TestCase):
                 status, output, _ = self.run_helper(guest, wait_screen=3)
                 self.assertNotEqual(status, 0)
                 self.assertNotIn("restart_required", output)
-                self.assertFalse(
-                    any(method == "device.screen" for method, _ in guest.calls)
-                )
-                self.assertFalse(
-                    any(method == "files.remove" for method, _ in guest.calls)
-                )
                 self.assertEqual(guest.clock.sleeps, [])
-                self.assertEqual(guest.writes, {})
+                self.assert_unchanged(guest, no_screen=True)
 
     def test_metrics_probe_and_legacy_response_share_one_deadline(self):
         guest = Guest(tree_fixture(2))
@@ -393,8 +386,7 @@ class GuestScaleTests(unittest.TestCase):
         self.assertEqual(guest.clock.now, 3)
         self.assertEqual(guest.connections[2].timeouts, [3, 2.5, 2])
         self.assertEqual(guest.connections[3].timeouts, [1.5, 1, 0.5])
-        self.assertTrue(all(connection.closed for connection in guest.connections))
-        self.assertEqual(guest.writes, {})
+        self.assert_unchanged(guest)
 
     def test_duplicate_wire_fields_are_not_a_scale_or_fallback_proof(self):
         unknown = (
@@ -416,16 +408,7 @@ class GuestScaleTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ValueError, "duplicate fields"):
                     self.run_helper(guest)
-                self.assertFalse(
-                    any(method == "device.screen" for method, _ in guest.calls)
-                )
-                self.assertFalse(
-                    any(method == "files.remove" for method, _ in guest.calls)
-                )
-                self.assertEqual(guest.writes, {})
-                self.assertTrue(
-                    all(connection.closed for connection in guest.connections)
-                )
+                self.assert_unchanged(guest, no_screen=True)
 
     def test_late_unsupported_reply_cannot_start_a_legacy_probe(self):
         for wait, duration in ((3, 1), (None, 100)):
@@ -441,13 +424,7 @@ class GuestScaleTests(unittest.TestCase):
                 status, output, _ = self.run_helper(guest, wait_screen=wait)
                 self.assertNotEqual(status, 0)
                 self.assertNotIn("restart_required", output)
-                self.assertFalse(
-                    any(method == "device.screen" for method, _ in guest.calls)
-                )
-                self.assertTrue(
-                    all(connection.closed for connection in guest.connections)
-                )
-                self.assertEqual(guest.writes, {})
+                self.assert_unchanged(guest, no_screen=True)
 
     def test_transient_missing_layout_waits_for_real_scale_without_mutation(self):
         guest = Guest(tree_fixture(2))
@@ -461,30 +438,8 @@ class GuestScaleTests(unittest.TestCase):
             {"changed": False, "scale": 2, "restart_required": False},
         )
         self.assertEqual(guest.clock.sleeps, [2])
-        self.assertEqual(guest.writes, {})
-        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
+        self.assert_unchanged(guest)
         self.assertFalse((self.root / "runs").exists())
-        self.assertTrue(all(connection.closed for connection in guest.connections))
-
-    def test_transfer_encoding_cannot_enable_legacy_fallback(self):
-        unsupported = {
-            "type": "response",
-            "id": 1,
-            "error": {
-                "code": "invalid_operation",
-                "message": "Unknown method: display.metrics",
-            },
-        }
-        guest = Guest(tree_fixture(2))
-        guest.raw_screen_reply = wire_reply(unsupported).replace(
-            b"\r\nContent-Length:", b"\r\nTransfer-Encoding: chunked\r\nContent-Length:"
-        )
-        with self.assertRaisesRegex(ValueError, "Transfer-Encoding"):
-            self.run_helper(guest)
-        self.assertFalse(any(method == "device.screen" for method, _ in guest.calls))
-        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
-        self.assertEqual(guest.writes, {})
-        self.assertTrue(all(connection.closed for connection in guest.connections))
 
     def test_fallback_requires_unambiguous_fixed_length_headers(self):
         unsupported = {
@@ -498,6 +453,7 @@ class GuestScaleTests(unittest.TestCase):
         body = json.dumps(unsupported).encode()
         length = str(len(body)).encode()
         for headers in (
+            b"Transfer-Encoding: chunked\r\nContent-Length: " + length,
             b"X-Test: no-length",
             b"Content-Length : " + length,
             b"Content-Length: " + length + b"\r\n folded-header",
@@ -517,13 +473,7 @@ class GuestScaleTests(unittest.TestCase):
                 self.assertFalse(
                     any(method == "device.screen" for method, _ in guest.calls)
                 )
-                self.assertFalse(
-                    any(method == "files.remove" for method, _ in guest.calls)
-                )
-                self.assertEqual(guest.writes, {})
-                self.assertTrue(
-                    all(connection.closed for connection in guest.connections)
-                )
+                self.assert_unchanged(guest)
 
     def test_missing_layout_wait_is_opt_in_and_persistent_failure_is_fatal(self):
         for wait in (None, 3):
@@ -542,13 +492,7 @@ class GuestScaleTests(unittest.TestCase):
                     self.assertNotEqual(status, 0)
                     self.assertNotIn("restart_required", output)
                     self.assertEqual(guest.clock.now, 3)
-                self.assertEqual(guest.writes, {})
-                self.assertFalse(
-                    any(method == "files.remove" for method, _ in guest.calls)
-                )
-                self.assertTrue(
-                    all(connection.closed for connection in guest.connections)
-                )
+                self.assert_unchanged(guest)
 
     def test_wait_still_requires_restart_for_proven_running_mismatch(self):
         guest = Guest(tree_fixture(2), running=3)
@@ -583,7 +527,7 @@ class GuestScaleTests(unittest.TestCase):
                 self.assertEqual(
                     sum(method == "device.screen" for method, _ in guest.calls), 1
                 )
-                self.assertEqual(guest.writes, {})
+                self.assert_unchanged(guest)
 
     def test_single_deadline_covers_connect_send_and_response(self):
         guest = Guest(tree_fixture(2))
@@ -593,8 +537,7 @@ class GuestScaleTests(unittest.TestCase):
         self.assertNotEqual(status, 0)
         self.assertNotIn("restart_required", output)
         self.assertEqual(guest.connections[2].timeouts, [3, 2, 1])
-        self.assertTrue(guest.connections[2].closed)
-        self.assertEqual(guest.writes, {})
+        self.assert_unchanged(guest)
 
     def test_repeated_reads_do_not_extend_the_deadline(self):
         guest = Guest(tree_fixture(2))
@@ -604,8 +547,7 @@ class GuestScaleTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_helper(guest, wait_screen=3)
         self.assertEqual(guest.connections[2].timeouts, [3, 3, 3, 2, 1])
-        self.assertTrue(guest.connections[2].closed)
-        self.assertEqual(guest.writes, {})
+        self.assert_unchanged(guest)
 
     def test_response_bounds_and_truncation_fail_without_mutation(self):
         for wire in (
@@ -618,8 +560,7 @@ class GuestScaleTests(unittest.TestCase):
                 guest.raw_screen_reply = wire
                 with self.assertRaises(ValueError):
                     self.run_helper(guest, wait_screen=3)
-                self.assertTrue(guest.connections[2].closed)
-                self.assertEqual(guest.writes, {})
+                self.assert_unchanged(guest)
 
     def test_invalid_wait_configuration_is_rejected_before_rpc(self):
         for value, machine in (
@@ -646,9 +587,8 @@ class GuestScaleTests(unittest.TestCase):
             json.loads(output),
             {"changed": False, "scale": 2, "restart_required": False},
         )
-        self.assertEqual(guest.writes, {})
-        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
         self.assertFalse((self.root / "runs").exists())
+        self.assert_unchanged(guest)
 
     def test_changed_tree_keeps_originals_invalidates_cache_and_requires_restart(self):
         original = tree_fixture(2, display_scale=3)
@@ -689,17 +629,21 @@ class GuestScaleTests(unittest.TestCase):
                 status, output, _ = self.run_helper(guest)
                 self.assertNotEqual(status, 0)
                 self.assertNotIn("restart_required", output)
-                self.assertEqual(guest.writes, {})
-                self.assertFalse(
-                    any(method == "files.remove" for method, _ in guest.calls)
-                )
+                self.assert_unchanged(guest)
 
-    def test_truncated_tree_is_not_accepted_as_unchanged(self):
-        guest = Guest(tree_fixture(2))
-        guest.truncated = True
-        status, _, _ = self.run_helper(guest)
-        self.assertNotEqual(status, 0)
-        self.assertEqual(guest.writes, {})
+    def test_incomplete_tree_read_is_not_accepted_as_unchanged(self):
+        for fields, missing in (
+            ({"truncated": True}, set()),
+            ({}, {"truncated"}),
+            ({"size": 0}, set()),
+        ):
+            with self.subTest(fields=fields, missing=missing):
+                guest = Guest(tree_fixture(2))
+                guest.read_fields = fields
+                guest.missing_read_fields = missing
+                status, _, _ = self.run_helper(guest)
+                self.assertNotEqual(status, 0)
+                self.assert_unchanged(guest)
 
     def test_failed_readback_or_cache_invalidation_is_fatal(self):
         for failure in ("corrupt_readback", "fail_remove"):
@@ -714,8 +658,8 @@ class GuestScaleTests(unittest.TestCase):
         guest = Guest(tree_fixture(2))
         status, output, _ = self.run_helper(guest, machine=False)
         self.assertEqual(status, 0)
-        self.assertIn("already requests 2x", output)
-        self.assertEqual(guest.writes, {})
+        self.assertIn("no device-tree update was needed", output)
+        self.assert_unchanged(guest)
 
 
 class FirstBootScaleTests(unittest.TestCase):

@@ -302,7 +302,9 @@ if bytes(img4) == original:
             rpc("files.remove", path=CACHE)
         print(json.dumps({"changed": False, "scale": scale, "restart_required": restart}))
     else:
-        print(f"the device tree already requests {scale}x; no files or cache changed.")
+        print(
+            f"the device tree already requests {scale}x; no device-tree update was needed."
+        )
     sys.exit()
 
 host_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "guest-dt-scale")
