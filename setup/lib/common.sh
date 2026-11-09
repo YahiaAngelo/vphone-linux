@@ -48,7 +48,7 @@ ensure_vphone_cli_source() {
   if [ -e "$src" ] || [ -L "$src" ]; then
     [ "$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" = "$(realpath "$src")" ] ||
       die "not a vphone-cli checkout: $src; preserve it and select another source directory"
-    origin=$(git -C "$src" remote get-url origin 2>/dev/null) || die "source checkout has no origin: $src"
+    origin=$(git -C "$src" config --get remote.origin.url) || die "source checkout has no origin: $src"
     selected_origin=$VPHONE_CLI_REPO
     while [[ $origin == */ ]]; do origin=${origin%/}; done
     while [[ $selected_origin == */ ]]; do selected_origin=${selected_origin%/}; done
