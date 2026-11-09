@@ -22,7 +22,7 @@ The submodules are pinned to these commits (each fork's `vphone` branch):
 |---|---|---|---|---|
 | `qemu` | [YahiaAngelo/qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone) | [ChefKissInc/QEMUAppleSilicon](https://github.com/ChefKissInc/QEMUAppleSilicon) `master` @ `cc4302a9`, plus Inferno's native A64 FP/NEON (`2eed395`, ported) | `vphone` | `f6b3bc9d8ec9ba3113a4dbae9e9584775cd0d1f2` |
 | `reims-vgpu` | [YahiaAngelo/reims-vgpu](https://github.com/YahiaAngelo/reims-vgpu) | [steelbrain/reims-vgpu](https://github.com/steelbrain/reims-vgpu) `development` @ `dabc7cf8` | `vphone-next4` | `310da076ade2ef2a008b287b5bb001e59637878c` |
-| `metal2vulkan` | [YahiaAngelo/metal2vulkan](https://github.com/YahiaAngelo/metal2vulkan) | [steelbrain/metal2vulkan](https://github.com/steelbrain/metal2vulkan) `development` @ `b10227d0` | `vphone-next4` | `df83a60a8912e429724820052f3f972c176103c8` |
+| `metal2vulkan` | [YahiaAngelo/metal2vulkan](https://github.com/YahiaAngelo/metal2vulkan) | [steelbrain/metal2vulkan](https://github.com/steelbrain/metal2vulkan) `development` @ `b10227d0` | `vphone-next4` | `82797567b123ed53710000a5dff0aa2d9b90e16b` |
 
 reims-vgpu's `Cargo.toml` has a `[patch]` section that takes metal2vulkan from `../metal2vulkan`, so the
 `vphone` metal2vulkan is used only when both submodules sit side by side, as they do here.
