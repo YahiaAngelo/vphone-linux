@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 LIB=${1:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
 VM=${2:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
 MODE=${3:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
-VC=${VC:-$PWD/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli}
+VC=${VC:-$PWD/linux-create/vphone-cli}
 SSHRD=${SSHRD:-$PWD/runs/sshramdisk/out/094-39914-031.dmg}
 SSHROOT=${SSHROOT:-$PWD/runs/sshramdisk/ssh-root}
 STOCK_RTSC=${STOCK_RTSC:-$PWD/runs/sshramdisk/stock-094-39914-031.dmg.trustcache}

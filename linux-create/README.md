@@ -16,16 +16,19 @@ files listed in `excludes/`, plus:
 - `Vendor/Img4tool/`: libimg4-spm 0.1.1 (the version vphone-cli pins) adapted for Linux; see its README.
 
 ```sh
-./build.sh                 # clone vphone-cli, install Swift if missing, sync-sources, swift build
-./vphone-cli fw prepare …  # run it (builds first when needed); sudo ./vphone-cli … for root steps
-# the binary: .build/out/out/Products/Debug-linux-x86_64/vphone-cli
+./build.sh                 # clone vphone-cli, install Swift if missing, sync-sources, build Release
+./vphone-cli fw prepare …  # run the built Release tool; sudo ./vphone-cli … for root steps
+# the binary: .build/out/out/Products/Release-linux-$(uname -m)/vphone-cli
 ```
 
 `build.sh` uses the Swift version in `.swift-version` (6.4.1). If it's missing, the script installs it
 with swiftly (Arch and other unsupported distros use swiftly's `ubi9` platform) and runs it by its full
 path, so you don't need to source swiftly's `env.sh` and its `clang`/`lld` stay off your PATH. Extra
-arguments go to `swift build` (for example `./build.sh -c release`). `VPHONE_CLI=DIR` builds against an
-existing vphone-cli checkout.
+arguments go to `swift build`; use `./build.sh -c debug` to build the Debug product explicitly.
+`VPHONE_CLI=DIR` builds against an existing vphone-cli checkout. The wrapper prefers Release and
+warns before using an existing Debug product when Release is absent. It does not build or install
+Swift during an invocation. If neither product exists, run `./build.sh --configuration release`.
+To run Debug when both products exist, use its `.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli` path.
 
 `VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
 commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).

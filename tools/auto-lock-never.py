@@ -16,7 +16,7 @@ import base64, hashlib, json, os, plistlib, shutil, socket, subprocess, sys, tem
 
 NEVER = 2**31 - 1
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VC = os.environ.get("VC", f"{ROOT}/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli")
+VC = os.environ.get("VC", f"{ROOT}/linux-create/vphone-cli")
 ENTITLEMENTS = {"com.apple.managedconfiguration.profiled-access": True,
                 "com.apple.managedconfiguration.profiled.set": True}
 SCRIPT = f"""

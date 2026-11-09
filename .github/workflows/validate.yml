@@ -270,7 +270,7 @@ jobs:
           bash setup/test/smoke.sh             # no built tools: the firmware step must degrade cleanly
           # The built-tools path is exercised on dev machines, where linux-create
           # has been built under $VSETUP_SRC — run the suite again against it:
-          if [ -x "$PWD/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli" ]; then
+          if [ -x "$PWD/linux-create/.build/out/out/Products/Release-linux-$(uname -m)/vphone-cli" ]; then
             VSETUP_SRC=$PWD VSETUP_RELEASE=$PWD VSETUP_DEVICES=/tmp/e2e-devices2 \
               bash setup/test/smoke.sh
           fi
