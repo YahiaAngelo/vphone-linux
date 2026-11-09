@@ -1,6 +1,11 @@
 @_exported import Glibc
 import Foundation
 
+// Linux Foundation has no Objective-C autorelease runtime.
+public func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
+    try body()
+}
+
 // macOS names for Linux stat fields.
 public extension stat {
     var st_mtimespec: timespec { st_mtim }

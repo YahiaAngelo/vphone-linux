@@ -30,6 +30,11 @@ existing vphone-cli checkout.
 Re-run `build.sh` after changing anything in `overlay/`, `edits/` or `excludes/`, or after moving
 the vphone-cli checkout to another tag.
 
+Patch-set manifests come from that selected CLI checkout. The sync edits expose their original
+values, and `FirmwareLinuxDisplayPatchSets.swift` adds the Linux secondary-display declarations
+and repair mapping. This keeps new upstream catalog references and manifest members together
+without replacing the selected CLI's declarations with an older copy.
+
 Linux CFW connections use the selected bundle's `config.plist` machine identifier to set
 `VPHONE_ECID` for each SSHFS connection. A missing identity or a conflicting `VPHONE_ECID`
 override is refused before any volume is mounted. This requires the connector's strict ECID
