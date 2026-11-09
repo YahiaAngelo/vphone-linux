@@ -89,10 +89,10 @@ Scale 1 is the better choice on WSL: lavapipe's cost grows with the pixel count.
   `create-vm.sh`. It stops the VM first, and a restore starts again from a blank `Disk.img`,
   `nvram.bin` and `SEPStorage`.
 
-- **`guest-1x-logo.py` fails with errno 30** (`Creating a temporary file via mktemp failed`) at
-  the end of a scale-1 first boot: the system volume stayed read-only after the tool's remount job.
-  Only the boot logo's size is affected; the VM is usable. `create-vm.sh` then reports the
-  `booted` step as failed; `echo booted >> <vm>/.create-state` marks it done.
+- **`guest-1x-logo.py` warns that `/` stayed read-only** at the end of a scale-1 first boot: the
+  system volume was still read-only 2 minutes after the tool's remount job. Only the boot logo's
+  size is affected; the VM is usable and `create-vm.sh` goes on. Run
+  `python3 tools/guest-1x-logo.py CID` again with the VM up to retry.
 
 Status: the whole create flow, to an unlocked iOS 26.6.2 home screen at 1x (Metal on lavapipe in
 a WSLg window), was run on WSL2 (Windows 11, Ubuntu 26.04, i7-14700K). The first boot's migration

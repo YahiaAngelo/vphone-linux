@@ -104,10 +104,22 @@ JOB_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def make_root_writable():
+    """True once / takes a write."""
     rpc("files.write", path=JOB, content=JOB_PLIST)
     try:
         rpc("services.load", paths=[JOB])
-        time.sleep(10)
+        # Wait until / takes a write: launchd runs the job when it gets to it, which took longer
+        # than a fixed 10 s under slow emulation (the logo write then failed: read-only).
+        probe = f"{DIR}/.vphone-linux-rw-probe"
+        for _ in range(60):
+            time.sleep(2)
+            try:
+                rpc("files.write", path=probe, content="")
+            except SystemExit:
+                continue
+            rpc("files.remove", path=probe)
+            return True
+        return False
     finally:
         rpc("services.unload", paths=[JOB], force=True)
         rpc("files.remove", path=JOB)
@@ -116,8 +128,10 @@ def make_root_writable():
 names = [e["name"] for e in rpc("files.list", path=DIR)["entries"]]
 todo = [n for n in names if n.startswith("apple-logo") and n.endswith("@2x~iphone.png")
         and n.replace("@2x~iphone.png", "~iphone.png") not in names]
-if todo:
-    make_root_writable()
+if todo and not make_root_writable():
+    # Cosmetic: without the 1x images the boot screen stays black until the lock screen.
+    print("warning: / stayed read-only, so no 1x boot logo was written")
+    sys.exit(0)
 done = 0
 for name in names:
     if not (name.startswith("apple-logo") and name.endswith("@2x~iphone.png")):
