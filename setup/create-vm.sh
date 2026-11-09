@@ -54,6 +54,14 @@ if [ "$LIST" = 1 ]; then
   exit 0
 fi
 
+check_first_boot_caller() {
+  local check=${VPHONE_FIRST_BOOT_CHECK:-}
+  [ -n "$check" ] || return 0
+  [[ $check = /* && -f $check && -x $check ]] ||
+    die "VPHONE_FIRST_BOOT_CHECK must name an absolute executable regular file"
+}
+check_first_boot_caller
+
 # ------------------------------------------------------------- pick device --
 device_menu() {
   local i choice
@@ -588,6 +596,7 @@ do_first_boot() {
   if [ "$DRY" = 1 ]; then
     dry env GFX="${GFX:-1}" WINDOW="${WINDOW:-1}" CID="$CID" "$QEMU_RUN" "$VM"
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.status",...}'   # until data_migration_done
+    [ -z "${VPHONE_FIRST_BOOT_CHECK:-}" ] || dry "$VPHONE_FIRST_BOOT_CHECK" "$VM" "$CID"
     dry "$T/vphoned.sh" POST /v1/rpc '{"method":"setup.skip","params":{"force":true},"id":1}'
     dry python3 "$T/auto-lock-never.py" "$VM" "$CID"
     [ "$SCALE" = 3 ] || dry python3 "$T/guest-dt-scale.py" "$CID" "$SCALE"
@@ -610,6 +619,10 @@ do_first_boot() {
     sleep "$((remaining < 30 ? remaining : 30))"; printf '.' >&2
   done
   echo >&2
+  if [ -n "${VPHONE_FIRST_BOOT_CHECK:-}" ]; then
+    "$VPHONE_FIRST_BOOT_CHECK" "$VM" "$CID" ||
+      die "first-boot caller check failed; setup changes were not applied"
+  fi
   vrpc '{"method":"setup.skip","params":{"force":true},"id":1}'; echo
   unlock_vm
   python3 "$T/auto-lock-never.py" "$VM" "$CID"
