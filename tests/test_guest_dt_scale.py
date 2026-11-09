@@ -7,6 +7,7 @@
 
 import base64
 import contextlib
+import copy
 import io
 import json
 import os
@@ -78,6 +79,25 @@ def tree_fixture(scale, display_scale=None):
     )
 
 
+def metrics_fixture(scale=2):
+    return {
+        "available": True,
+        "source": "frontboard_default_main",
+        "reason": "",
+        "display_id": 1,
+        "point_scale": scale,
+        "bounds": {"x": 0, "y": 0, "width": 744, "height": 1133},
+        "reference_bounds": {"x": 0, "y": 0, "width": 744, "height": 1133},
+    }
+
+
+def wire_reply(envelope, status=400):
+    body = json.dumps(envelope).encode()
+    return (
+        f"HTTP/1.1 {status} Test\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+    )
+
+
 class Guest:
     def __init__(self, tree, running=2):
         self.tree = tree
@@ -88,6 +108,9 @@ class Guest:
         self.corrupt_readback = False
         self.fail_remove = False
         self.screen_errors = []
+        self.metrics_supported = True
+        self.metrics_errors = []
+        self.metrics_result = None
         self.connections = []
         self.clock = None
         self.io_seconds = {}
@@ -124,6 +147,16 @@ class Guest:
                 if error is not None:
                     raise RPCFailure(*error)
             return {"scale": self.running}
+        if method == "display.metrics":
+            if not self.metrics_supported:
+                raise RPCFailure("invalid_operation", "Unknown method: display.metrics")
+            if self.metrics_errors:
+                raise RPCFailure(*self.metrics_errors.pop(0))
+            return (
+                self.metrics_result
+                if self.metrics_result is not None
+                else metrics_fixture(self.running)
+            )
         raise AssertionError(method)
 
     def connection(self, *_args):
@@ -134,7 +167,7 @@ class Guest:
                 self.closed = False
                 self.timeouts = []
                 self.method = None
-                self.screen = len(guest.connections) == 2
+                self.screen = len(guest.connections) >= 2
                 guest.connections.append(self)
 
             def advance(self, phase):
@@ -159,18 +192,29 @@ class Guest:
                 self.advance("send")
                 try:
                     reply = {
-                        "result": guest.request(request["method"], request["params"])
+                        "type": "response",
+                        "id": 1,
+                        "result": guest.request(request["method"], request["params"]),
                     }
+                    status = b"200 OK"
                 except ValueError as error:
-                    reply = {"error": {"message": str(error)}}
+                    reply = {
+                        "type": "response",
+                        "id": 1,
+                        "error": {"message": str(error)},
+                    }
+                    status = b"400 Bad Request"
                     if isinstance(error, RPCFailure):
                         reply["error"]["code"] = error.code
                 body = json.dumps(reply).encode()
                 self.data = (
-                    b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+                    b"HTTP/1.1 "
+                    + status
+                    + b"\r\nContent-Length: %d\r\n\r\n" % len(body)
+                    + body
                 )
                 if (
-                    self.method == "device.screen"
+                    self.method in ("device.screen", "display.metrics")
                     and guest.raw_screen_reply is not None
                 ):
                     self.data = guest.raw_screen_reply
@@ -222,8 +266,192 @@ class GuestScaleTests(unittest.TestCase):
                 status = 0 if error.code is None else error.code
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def test_metrics_prove_scale_while_legacy_orientation_is_unavailable(self):
+        guest = Guest(tree_fixture(2))
+        guest.screen_errors = [("unavailable", MISSING_LAYOUT)]
+        status, output, _ = self.run_helper(guest)
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            json.loads(output),
+            {"changed": False, "scale": 2, "restart_required": False},
+        )
+        self.assertFalse(any(method == "device.screen" for method, _ in guest.calls))
+        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
+        self.assertEqual(guest.writes, {})
+        self.assertTrue(all(connection.closed for connection in guest.connections))
+
+    def test_only_exact_unsupported_metrics_response_uses_legacy_screen(self):
+        guest = Guest(tree_fixture(2))
+        guest.metrics_supported = False
+        status, output, _ = self.run_helper(guest)
+        self.assertEqual(status, 0)
+        self.assertFalse(json.loads(output)["restart_required"])
+        self.assertEqual(
+            [method for method, _ in guest.calls][-2:],
+            ["display.metrics", "device.screen"],
+        )
+
+        unsupported = {
+            "type": "response",
+            "id": 1,
+            "error": {
+                "code": "invalid_operation",
+                "message": "Unknown method: display.metrics",
+            },
+        }
+        variants = [(200, unsupported), (503, unsupported)]
+        for key, value in (
+            ("id", True),
+            ("id", 1.0),
+            ("id", 2),
+            ("type", "request"),
+            ("result", {}),
+        ):
+            envelope = copy.deepcopy(unsupported)
+            envelope[key] = value
+            variants.append((400, envelope))
+        for code, message in (
+            ("unknown_method", "Unknown method: display.metrics"),
+            ("invalid_operation", "Unknown method: device.screen"),
+            ("invalid_operation", "Unknown method: display.metrics extra"),
+        ):
+            envelope = copy.deepcopy(unsupported)
+            envelope["error"] = {"code": code, "message": message}
+            variants.append((400, envelope))
+        for http_status, envelope in variants:
+            with self.subTest(http_status=http_status, envelope=envelope):
+                guest = Guest(tree_fixture(2))
+                guest.raw_screen_reply = wire_reply(envelope, http_status)
+                try:
+                    status, output, _ = self.run_helper(guest, wait_screen=3)
+                    self.assertNotEqual(status, 0)
+                    self.assertNotIn("restart_required", output)
+                except ValueError:
+                    pass
+                self.assertFalse(
+                    any(method == "device.screen" for method, _ in guest.calls)
+                )
+                self.assertEqual(guest.writes, {})
+                self.assertTrue(
+                    all(connection.closed for connection in guest.connections)
+                )
+
+    def test_unavailable_and_malformed_metrics_never_fall_back_or_mutate(self):
+        variants = []
+        for key, values in {
+            "available": [False, 1],
+            "source": ["cadisplay", None],
+            "reason": ["ambiguous", None],
+            "display_id": [None, True, 0, -1, 1.5, 1 << 32, "1"],
+            "point_scale": [None, True, "2", 0, -1, float("inf"), float("nan")],
+            "monitors": [[{}, {}]],
+        }.items():
+            for value in values:
+                result = metrics_fixture()
+                result[key] = value
+                variants.append(result)
+        for field in ("bounds", "reference_bounds"):
+            result = metrics_fixture()
+            del result[field]
+            variants.append(result)
+            for key, value in (
+                ("x", True),
+                ("x", 1),
+                ("y", -1),
+                ("width", True),
+                ("width", 0),
+                ("height", float("inf")),
+            ):
+                result = metrics_fixture()
+                result[field][key] = value
+                variants.append(result)
+        for result in variants:
+            with self.subTest(result=result):
+                guest = Guest(tree_fixture(2))
+                guest.clock = Clock()
+                guest.metrics_result = result
+                status, output, _ = self.run_helper(guest, wait_screen=3)
+                self.assertNotEqual(status, 0)
+                self.assertNotIn("restart_required", output)
+                self.assertFalse(
+                    any(method == "device.screen" for method, _ in guest.calls)
+                )
+                self.assertFalse(
+                    any(method == "files.remove" for method, _ in guest.calls)
+                )
+                self.assertEqual(guest.clock.sleeps, [])
+                self.assertEqual(guest.writes, {})
+
+    def test_metrics_probe_and_legacy_response_share_one_deadline(self):
+        guest = Guest(tree_fixture(2))
+        guest.metrics_supported = False
+        guest.clock = Clock()
+        guest.io_seconds = {"connect": 0.5, "send": 0.5, "recv": 0.5}
+        status, output, _ = self.run_helper(guest, wait_screen=3)
+        self.assertNotEqual(status, 0)
+        self.assertNotIn("restart_required", output)
+        self.assertEqual(guest.clock.now, 3)
+        self.assertEqual(guest.connections[2].timeouts, [3, 2.5, 2])
+        self.assertEqual(guest.connections[3].timeouts, [1.5, 1, 0.5])
+        self.assertTrue(all(connection.closed for connection in guest.connections))
+        self.assertEqual(guest.writes, {})
+
+    def test_duplicate_wire_fields_are_not_a_scale_or_fallback_proof(self):
+        unknown = (
+            b'{"type":"response","id":2,"id":1,"error":'
+            b'{"code":"invalid_operation","message":"Unknown method: display.metrics"}}'
+        )
+        success = json.dumps(
+            {"type": "response", "id": 1, "result": metrics_fixture()}
+        ).encode()
+        success = success.replace(
+            b'"point_scale": 2', b'"point_scale": 2, "point_scale": 3'
+        )
+        for code, body in ((400, unknown), (200, success)):
+            with self.subTest(code=code):
+                guest = Guest(tree_fixture(2))
+                guest.raw_screen_reply = (
+                    f"HTTP/1.1 {code} Test\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                    + body
+                )
+                with self.assertRaisesRegex(ValueError, "duplicate fields"):
+                    self.run_helper(guest)
+                self.assertFalse(
+                    any(method == "device.screen" for method, _ in guest.calls)
+                )
+                self.assertFalse(
+                    any(method == "files.remove" for method, _ in guest.calls)
+                )
+                self.assertEqual(guest.writes, {})
+                self.assertTrue(
+                    all(connection.closed for connection in guest.connections)
+                )
+
+    def test_late_unsupported_reply_cannot_start_a_legacy_probe(self):
+        for wait, duration in ((3, 1), (None, 100)):
+            with self.subTest(wait=wait):
+                guest = Guest(tree_fixture(2))
+                guest.metrics_supported = False
+                guest.clock = Clock()
+                guest.io_seconds = {
+                    "connect": duration,
+                    "send": duration,
+                    "recv": duration,
+                }
+                status, output, _ = self.run_helper(guest, wait_screen=wait)
+                self.assertNotEqual(status, 0)
+                self.assertNotIn("restart_required", output)
+                self.assertFalse(
+                    any(method == "device.screen" for method, _ in guest.calls)
+                )
+                self.assertTrue(
+                    all(connection.closed for connection in guest.connections)
+                )
+                self.assertEqual(guest.writes, {})
+
     def test_transient_missing_layout_waits_for_real_scale_without_mutation(self):
         guest = Guest(tree_fixture(2))
+        guest.metrics_supported = False
         guest.clock = Clock()
         guest.screen_errors = [("unavailable", MISSING_LAYOUT), None]
         status, output, _ = self.run_helper(guest, wait_screen=6)
@@ -238,10 +466,70 @@ class GuestScaleTests(unittest.TestCase):
         self.assertFalse((self.root / "runs").exists())
         self.assertTrue(all(connection.closed for connection in guest.connections))
 
+    def test_transfer_encoding_cannot_enable_legacy_fallback(self):
+        unsupported = {
+            "type": "response",
+            "id": 1,
+            "error": {
+                "code": "invalid_operation",
+                "message": "Unknown method: display.metrics",
+            },
+        }
+        guest = Guest(tree_fixture(2))
+        guest.raw_screen_reply = wire_reply(unsupported).replace(
+            b"\r\nContent-Length:", b"\r\nTransfer-Encoding: chunked\r\nContent-Length:"
+        )
+        with self.assertRaisesRegex(ValueError, "Transfer-Encoding"):
+            self.run_helper(guest)
+        self.assertFalse(any(method == "device.screen" for method, _ in guest.calls))
+        self.assertFalse(any(method == "files.remove" for method, _ in guest.calls))
+        self.assertEqual(guest.writes, {})
+        self.assertTrue(all(connection.closed for connection in guest.connections))
+
+    def test_fallback_requires_unambiguous_fixed_length_headers(self):
+        unsupported = {
+            "type": "response",
+            "id": 1,
+            "error": {
+                "code": "invalid_operation",
+                "message": "Unknown method: display.metrics",
+            },
+        }
+        body = json.dumps(unsupported).encode()
+        length = str(len(body)).encode()
+        for headers in (
+            b"X-Test: no-length",
+            b"Content-Length : " + length,
+            b"Content-Length: " + length + b"\r\n folded-header",
+            b"Content-Length: " + length + b"\r\nBad Name: value",
+            b"Content-Length: " + length + b"\r\nX-Test: bad\x00value",
+            b"Content-Length: +" + length,
+            b"Content-Length: 0" + length,
+            b"Content-Length: " + length + b"\r\nContent-Length: " + length,
+        ):
+            with self.subTest(headers=headers):
+                guest = Guest(tree_fixture(2))
+                guest.raw_screen_reply = (
+                    b"HTTP/1.1 400 Bad Request\r\n" + headers + b"\r\n\r\n" + body
+                )
+                with self.assertRaises(ValueError):
+                    self.run_helper(guest)
+                self.assertFalse(
+                    any(method == "device.screen" for method, _ in guest.calls)
+                )
+                self.assertFalse(
+                    any(method == "files.remove" for method, _ in guest.calls)
+                )
+                self.assertEqual(guest.writes, {})
+                self.assertTrue(
+                    all(connection.closed for connection in guest.connections)
+                )
+
     def test_missing_layout_wait_is_opt_in_and_persistent_failure_is_fatal(self):
         for wait in (None, 3):
             with self.subTest(wait=wait):
                 guest = Guest(tree_fixture(2))
+                guest.metrics_supported = False
                 guest.clock = Clock()
                 guest.screen_errors = [("unavailable", MISSING_LAYOUT)] * 10
                 if wait is None:
@@ -264,6 +552,7 @@ class GuestScaleTests(unittest.TestCase):
 
     def test_wait_still_requires_restart_for_proven_running_mismatch(self):
         guest = Guest(tree_fixture(2), running=3)
+        guest.metrics_supported = False
         guest.clock = Clock()
         guest.screen_errors = [("unavailable", MISSING_LAYOUT), None]
         status, output, _ = self.run_helper(guest, wait_screen=6)
@@ -284,6 +573,7 @@ class GuestScaleTests(unittest.TestCase):
         ):
             with self.subTest(code=code, message=message):
                 guest = Guest(tree_fixture(2))
+                guest.metrics_supported = False
                 guest.clock = Clock()
                 guest.screen_errors = [(code, message), None]
                 status, output, _ = self.run_helper(guest, wait_screen=6)

@@ -14,11 +14,12 @@ integers, so nothing moves. Without SCALE it prints what the tree holds. It keep
 next to it in the guest (devicetree.img4.before-scale, once) and on the host
 (runs/guest-dt-scale/), and removes MobileGestalt's cache, which keeps the first boot's answers.
 Unchanged trees are not rewritten or backed up again. With --json, stdout contains changed,
-scale and restart_required; an unchanged tree also needs device.screen to confirm the running
-scale before the cache and running guest can be left alone. A stale running scale invalidates
+scale and restart_required; an unchanged tree also needs display.metrics to confirm the running
+scale before the cache and running guest can be left alone. Older workers can use device.screen
+only after the exact unsupported-method response. A stale running scale invalidates
 the cache and still requires a restart. Existing positional calls print human-readable output.
 --wait-screen SECONDS optionally waits for FrontBoard's layout after a SpringBoard restart;
-only the missing-layout error is retried, and geometry must still be proven before a no-op.
+only the legacy missing-layout error is retried, and running scale must be proven before a no-op.
 The new scale shows from the next boot. Use it together with display-scale.py and the VM's
 gfx-res (docs/ADVANCED.md, "Display scale"); tools/set-scale.sh runs it."""
 import argparse, base64, json, math, os, socket, struct, sys, time
@@ -44,9 +45,14 @@ output = sys.stderr if args.json else sys.stdout
 
 MISSING_LAYOUT = "Active interface geometry is unavailable: FrontBoard returned no usable layout"
 MAX_RESPONSE = 4 << 20
+HTTP_TOKEN = b"!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 class ScreenGeometryUnavailable(Exception):
+    pass
+
+
+class DisplayMetricsUnsupported(Exception):
     pass
 
 
@@ -58,8 +64,7 @@ def socket_deadline(s, deadline):
 
 
 def response(s, deadline):
-    """One HTTP response's body: up to its Content-Length, since vphoned can keep the
-    connection open after replying (tools/vphoned-update.sh)."""
+    """Read vphoned's fixed-length response without waiting for it to close."""
     raw = b""
     while b"\r\n\r\n" not in raw:
         socket_deadline(s, deadline)
@@ -72,24 +77,51 @@ def response(s, deadline):
     head, _, body = raw.partition(b"\r\n\r\n")
     if not _ or len(head) > 65536:
         raise ValueError("guest RPC response header is incomplete or too large")
-    lengths = [int(l.split(b":", 1)[1]) for l in head.split(b"\r\n")
-               if l.lower().startswith(b"content-length:")]
-    if len(lengths) > 1 or any(n < 0 or n > MAX_RESPONSE for n in lengths):
-        raise ValueError("guest RPC response has an invalid Content-Length")
-    length = lengths[0] if lengths else None
-    if len(body) > MAX_RESPONSE:
-        raise ValueError("guest RPC response exceeds 4 MiB")
-    while length is None or len(body) < length:
+    status = head.split(b"\r\n", 1)[0].split(b" ", 2)
+    if (len(status) != 3 or status[0] != b"HTTP/1.1" or len(status[1]) != 3 or not status[1].isdigit()
+            or not status[2] or any(c < 32 or c == 127 for c in status[2])):
+        raise ValueError("guest RPC response has an invalid HTTP status")
+    length = None
+    for line in head.split(b"\r\n")[1:]:
+        name, separator, value = line.partition(b":")
+        if (not separator or not name or any(c not in HTTP_TOKEN for c in name)
+                or any((c < 32 and c != 9) or c == 127 for c in value)):
+            raise ValueError("guest RPC response has a malformed header")
+        name = name.lower()
+        if name == b"transfer-encoding":
+            raise ValueError("guest RPC response uses unsupported Transfer-Encoding")
+        if name == b"content-length":
+            value = value.strip(b" \t")
+            if (length is not None or not value.isdigit() or len(value) > len(str(MAX_RESPONSE))
+                    or (len(value) > 1 and value.startswith(b"0"))):
+                raise ValueError("guest RPC response has an invalid Content-Length")
+            length = int(value)
+            if length > MAX_RESPONSE:
+                raise ValueError("guest RPC response exceeds 4 MiB")
+    if length is None:
+        raise ValueError("guest RPC response requires one Content-Length")
+    if len(body) > length:
+        raise ValueError("guest RPC response exceeds its Content-Length")
+    while len(body) < length:
         socket_deadline(s, deadline)
-        chunk = s.recv(min(1 << 16, MAX_RESPONSE + 1 - len(body)))
+        chunk = s.recv(min(1 << 16, length - len(body)))
         if not chunk:
             break
         body += chunk
         if len(body) > MAX_RESPONSE:
             raise ValueError("guest RPC response exceeds 4 MiB")
-    if length is not None and len(body) < length:
+    if len(body) < length:
         raise ValueError("guest RPC response body is incomplete")
-    return body if length is None else body[:length]
+    return int(status[1]), body
+
+
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("guest RPC response contains duplicate fields")
+        result[key] = value
+    return result
 
 
 def rpc(method, *, _deadline=None, **params):
@@ -105,27 +137,70 @@ def rpc(method, *, _deadline=None, **params):
         socket_deadline(s, deadline)
         s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
                   b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-        r = json.loads(response(s, deadline))
+        status, reply = response(s, deadline)
+        r = json.loads(reply, object_pairs_hook=unique_fields)
     finally:
         s.close()
+    if (not isinstance(r, dict) or r.get("type") != "response"
+            or type(r.get("id")) is not int or r["id"] != 1
+            or ("error" in r) == ("result" in r)):
+        raise ValueError("guest RPC response has an invalid envelope")
     if "error" in r:
-        if (method == "device.screen" and r["error"].get("code") == "unavailable"
-                and r["error"].get("message") == MISSING_LAYOUT):
+        error = r["error"]
+        if not isinstance(error, dict) or not isinstance(error.get("message"), str):
+            raise ValueError("guest RPC response has an invalid error")
+        if (method == "display.metrics" and status == 400
+                and error.get("code") == "invalid_operation"
+                and error["message"] == "Unknown method: display.metrics"):
+            raise DisplayMetricsUnsupported()
+        if (method == "device.screen" and status == 400 and error.get("code") == "unavailable"
+                and error["message"] == MISSING_LAYOUT):
             raise ScreenGeometryUnavailable(MISSING_LAYOUT)
-        sys.exit(f"{method}: {r['error']['message']}")
+        sys.exit(f"{method}: {error['message']}")
+    if status != 200 or not isinstance(r["result"], dict):
+        raise ValueError("guest RPC response has an invalid success result")
     return r["result"]
 
 
+def positive_number(value):
+    return type(value) in (int, float) and math.isfinite(value) and value > 0
+
+
+def metrics_scale(result):
+    if (set(result) != {"available", "source", "reason", "display_id", "bounds", "reference_bounds", "point_scale"}
+            or result.get("available") is not True or result.get("source") != "frontboard_default_main"
+            or result.get("reason") != ""):
+        sys.exit("display.metrics: no verified default-main display configuration")
+    identity = result.get("display_id")
+    if type(identity) is not int or not 0 < identity <= 0xFFFFFFFF:
+        sys.exit("display.metrics: expected a positive 32-bit display identity")
+    for field in ("bounds", "reference_bounds"):
+        rect = result.get(field)
+        if (not isinstance(rect, dict)
+                or any(type(rect.get(key)) not in (int, float) or not math.isfinite(rect[key])
+                       or rect[key] != 0 for key in ("x", "y"))
+                or not all(positive_number(rect.get(key)) for key in ("width", "height"))):
+            sys.exit("display.metrics: expected finite zero-origin display bounds")
+    scale = result.get("point_scale")
+    if not positive_number(scale):
+        sys.exit("display.metrics: expected a positive numeric point scale")
+    return scale
+
+
 def running_scale():
-    deadline = time.monotonic() + args.wait_screen if args.wait_screen else None
+    deadline = time.monotonic() + (args.wait_screen or 300)
+    method = "display.metrics"
     waiting = False
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
-            sys.exit("device.screen: no verified running scale before the wait expired")
+        if time.monotonic() >= deadline:
+            sys.exit(f"{method}: no verified running scale before the wait expired")
         try:
-            result = rpc("device.screen", _deadline=deadline)
+            result = rpc(method, _deadline=deadline)
+        except DisplayMetricsUnsupported:
+            method = "device.screen"
+            continue
         except ScreenGeometryUnavailable as error:
-            remaining = 0 if deadline is None else deadline - time.monotonic()
+            remaining = deadline - time.monotonic() if args.wait_screen else 0
             if remaining <= 0:
                 sys.exit(f"device.screen: {error}; no verified running scale before the wait expired")
             if not waiting:
@@ -133,10 +208,12 @@ def running_scale():
                 waiting = True
             time.sleep(min(2, remaining))
             continue
-        if deadline is not None and time.monotonic() >= deadline:
-            sys.exit("device.screen: running-scale proof arrived after the wait deadline")
+        if time.monotonic() >= deadline:
+            sys.exit(f"{method}: running-scale proof arrived after the wait deadline")
+        if method == "display.metrics":
+            return metrics_scale(result)
         running = result.get("scale")
-        if type(running) not in (int, float) or not math.isfinite(running) or running <= 0:
+        if not positive_number(running):
             sys.exit("device.screen: expected a positive numeric scale")
         return running
 
