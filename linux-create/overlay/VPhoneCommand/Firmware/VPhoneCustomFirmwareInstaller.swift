@@ -3511,6 +3511,9 @@ struct VPhoneCustomFirmwareInstaller {
             repairGroup.append((FirmwareGuestSystemPatchSet.prebootFoldableDisplays, "patch-dt-foldable-displays",
                                 boardDeviceTree.map { [$0.path] } ?? []))
         }
+        if [.iPhone, .iPad].contains(guestDevice.family) {
+            repairGroup.append((FirmwareGuestSystemPatchSet.prebootVirtualUSBDriverKit, "patch-dt-driverkit", []))
+        }
         repairGroup.append((FirmwareGuestSystemPatchSet.prebootHaptics, "patch-dt-haptics", []))
         // vphone-linux: a foldable guest keeps its panel nodes for the fold
         // patches above (see DeviceTreePatcher.removeSecondaryDisplays).

@@ -362,7 +362,7 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
     var restoreTXM = false
     @Flag(
         name: .customLong("restore-txm-precheck"),
-        help: "Force the restore ramdisk's release TXM selector-24 pre-check to PASS and refresh the manifest (SSH ramdisk)",
+        help: "Apply native signature classification to the restore ramdisk's release TXM and refresh the manifest (SSH ramdisk)",
     )
     var restoreTXMPrecheck = false
     @Flag(help: ArgumentHelp(
@@ -542,11 +542,8 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
         print("[fw patch] applied \(count) TXM patches to \(txm.lastPathComponent) and refreshed BuildManifest.plist")
     }
 
-    /// On 187.100.3 the selector-24 pre-check walk has nothing to admit against
-    /// when the trust-cache magazine is empty, so the ladder falls through to
-    /// the CMS gate. Force the walk's PASS exit instead (`0x90`), which covers
-    /// the ad-hoc and CMS branches too. This is a policy-grade, restore-only
-    /// patch; the guest TXM is untouched.
+    /// Apply the shared native-classification policy to the release restore TXM.
+    /// The policy pre-check is preserved; the guest's research TXM is untouched.
     private func patchRestoreTXMPrecheck(vmDirectory: URL, preset: VPhonePatchPreset) throws {
         let restoreDir = try restoreDirectory(in: vmDirectory)
         let txm = restoreDir.appendingPathComponent("Firmware/txm.iphoneos.release.im4p")
@@ -563,7 +560,7 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
         )
         let count = try pipeline.patchRestoreTXMPrecheckFile(at: txm)
         try refreshManifest(in: restoreDir)
-        print("[fw patch] applied \(count) TXM pre-check patches to \(txm.lastPathComponent) and refreshed BuildManifest.plist")
+        print("[fw patch] applied \(count) TXM admission patches to \(txm.lastPathComponent) and refreshed BuildManifest.plist")
     }
 
     private func refreshManifest(in restoreDir: URL) throws {

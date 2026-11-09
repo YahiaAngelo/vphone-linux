@@ -85,3 +85,26 @@ stubs. The copied SSHFS wrapper substitutes only its absolute SSH executable wit
 stub; the production wrapper keeps `/usr/bin/ssh`. The connection check also passes a literal
 connector path through the real FUSE option parser and OpenSSH to a local stub that exits
 without network or USB access. These checks do not create mounts or verify a guest installation.
+
+The DriverKit adapter and native restore-TXM admission require CLI source containing `edaa02f0`
+and `af560830`; neither `2.14.2` nor `2.15.2` contains these APIs. Development validation uses
+the explicit source revision `cb23353eb61b74186bc0b345fe34e6868b733746`, with the selected CLI's
+patch manifests. The default source and public guest-resource pins stay unchanged pending a
+compatible release and native validation.
+
+The release-TXM regression uses a private, pristine `txm.iphoneos.release.im4p` from TXM
+`187.100.3`. Only its identity metadata is tracked. With Swift 6.4.1 and synchronized sources:
+
+```sh
+VPHONE_RESTORE_TXM_187_100_3=/private/firmware/txm.iphoneos.release.im4p \
+  swift test --package-path linux-create --filter RestoreTXMTests
+```
+
+The fixture checks are skipped when the variable is unset. They exercise the actual Swift
+patcher and container writer on private copies, including refusal without writes for changed
+cache/classifier or incomplete selector-24 sites. SSH ramdisk boot, normal guest boot, and
+touchscreen input remain separate native checks.
+
+Unsupported restore-TXM layouts fail before writing. The error includes the embedded
+`TrustedExecutionMonitor` build label when available, or `unknown build`, and the original
+matcher failure. A different build label does not bypass the native-layout checks.
