@@ -46,7 +46,7 @@ extension VPhoneStagedDyldCache {
         }
         var manifest = try JSONDecoder().decode(Manifest.self, from: stage.readData("manifest.json"))
         try pending.validateRecoveryPlan(manifest)
-        guard ["patched", "publishing", "published-awaiting-receipt", "published", "rolling-back", "rolled-back"].contains(manifest.state) else {
+        guard ["patched", "publishing", "published", "rolling-back", "rolled-back"].contains(manifest.state) else {
             throw Failure("Recovery manifest does not describe a prepared publication")
         }
         let mainNames = manifest.before.keys.filter { $0.hasPrefix("dyld_shared_cache_") && !$0.contains(".") && !$0.contains("/") }
@@ -106,6 +106,14 @@ extension VPhoneStagedDyldCache {
                 }
             } else if try source.exists(name) {
                 throw Failure("Guest cache member appeared during recovery: \(name)")
+            }
+            if let expected = manifest.before[name], observed[name] == expected {
+                if name != undoName { continue }
+                if let permissions = manifest.permissions?[name], let destination = destinations[name],
+                   destination.owner == permissions.owner, destination.group == permissions.group,
+                   destination.mode & 0o777 == permissions.mode {
+                    continue
+                }
             }
             guard let original = savedBefore[name] else {
                 if let destination = destinations[name] {

@@ -47,6 +47,63 @@ final class StagedDyldCacheTests: XCTestCase {
         XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
     }
 
+    func testUnchangedPublicationNeedsNoJournalOrGuestWriteAndAllowsReceipt() throws {
+        let f = try fixture()
+        f.faults.journalSync = { _ in errno = EIO; return -1 }
+        f.faults.write = { _, _, _, _ in XCTFail("An unchanged family must not be written"); return -1 }
+        var synced = false
+        try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {
+            XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
+            synced = true
+        })
+        XCTAssertTrue(synced)
+        XCTAssertEqual(try manifest(f).state, "unchanged")
+        XCTAssertFalse(f.pending.retainsRecoveryFiles)
+        try VPhoneStagedDyldCache.Completion().recordReceipt(
+            in: f.bundle, pending: f.pending, synchronizeGuest: {}, write: {
+                try f.bundle.writeFile("receipt.json", contents: Data("complete".utf8), mode: 0o600)
+            })
+        XCTAssertTrue(try f.bundle.exists("receipt.json"))
+    }
+
+    func testUnchangedPublicationStillRequiresGuestPreimageAndSync() throws {
+        for failure in ["preimage", "sync"] {
+            let f = try fixture()
+            if failure == "preimage" {
+                try f.remote.writeFile(f.main, contents: Data("unrelated".utf8), mode: 0o640)
+            }
+            var synced = false
+            XCTAssertThrowsError(try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {
+                synced = true
+                throw CocoaError(.fileWriteUnknown)
+            }))
+            XCTAssertEqual(synced, failure == "sync")
+            XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
+            XCTAssertThrowsError(try VPhoneStagedDyldCache.Completion().recordReceipt(
+                in: f.bundle, pending: f.pending, synchronizeGuest: {}, write: {
+                    XCTFail("An unverified cache must not allow an installer receipt")
+                }))
+        }
+    }
+
+    func testUnchangedPublicationCannotAdoptAChangedDiskOrCompetingFence() throws {
+        for change in ["disk", "journal"] {
+            let f = try fixture()
+            XCTAssertThrowsError(try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {
+                if change == "disk" {
+                    try f.bundle.removeItem("Disk.img")
+                    try f.bundle.writeFile("Disk.img", contents: Data("replacement disk".utf8), mode: 0o600)
+                } else {
+                    try f.bundle.writeFile(VPhoneStagedDyldCache.pendingName, contents: Data("foreign journal".utf8), mode: 0o600)
+                }
+            }))
+            XCTAssertFalse(f.pending.retainsRecoveryFiles)
+            if change == "journal" {
+                XCTAssertEqual(try f.bundle.readData(VPhoneStagedDyldCache.pendingName), Data("foreign journal".utf8))
+            }
+        }
+    }
+
     func testLegacyReceiptDoesNotPreventRetry() throws {
         XCTAssertEqual(VPhoneStagedDyldCache.priorGuestPatches(wasInstalled: true, receipt: nil), [])
     }
@@ -173,6 +230,36 @@ final class StagedDyldCacheTests: XCTestCase {
         XCTAssertFalse(try f.bundle.exists("receipt.json"))
         XCTAssertEqual(try manifest(f).state, "rolled-back")
         XCTAssertNoThrow(try VPhoneStagedDyldCache.PendingPublication(bundleDirectory: f.bundle))
+    }
+
+    func testRecoveryDoesNotRewriteFilesAlreadyMatchingTheOriginal() throws {
+        let f = try fixture()
+        let original = try f.remote.openRegularFile(f.main)
+        try interruptPublication(f)
+        var written: Set<ino_t> = []
+        var io = VPhoneStagedDyldCache.IO()
+        io.write = { descriptor, bytes, count, offset in
+            var metadata = stat()
+            XCTAssertEqual(fstat(descriptor, &metadata), 0)
+            written.insert(metadata.st_ino)
+            return Glibc.pwrite(descriptor, bytes, count, offset)
+        }
+        try recover(f, io: io)
+        XCTAssertEqual(written, [original.inode])
+        XCTAssertEqual(try f.remote.readData(f.main), Data("abcdefgh".utf8))
+        XCTAssertEqual(try f.remote.readData(VPhoneStagedDyldCache.undoName), Data("old undo".utf8))
+        XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
+    }
+
+    func testRecoveryRestoresUndoPermissionsEvenWhenItsBytesAreAlreadyOriginal() throws {
+        let f = try fixture()
+        try interruptPublication(f)
+        let undo = try f.remote.openRegularFile(VPhoneStagedDyldCache.undoName)
+        XCTAssertEqual(fchmod(undo.descriptor, 0o640), 0)
+        try recover(f)
+        XCTAssertEqual(try f.remote.readData(VPhoneStagedDyldCache.undoName), Data("old undo".utf8))
+        XCTAssertEqual(try f.remote.openRegularFile(VPhoneStagedDyldCache.undoName).mode & 0o777, 0o600)
+        XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
     }
 
     func testRecoveryWriteAndGuestSyncFailuresKeepFenceAndCanBeRetried() throws {

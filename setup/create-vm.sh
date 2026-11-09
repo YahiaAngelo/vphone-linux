@@ -192,6 +192,7 @@ do_sanity() {
   # needs ~15 GB more while the VM is made: about 60 GB before the additional
   # CFW cache scratch budget, which the installer checks against the actual family.
   check_vm_disk_space
+  check_cfw_disk_space
 }
 
 do_bundle() {

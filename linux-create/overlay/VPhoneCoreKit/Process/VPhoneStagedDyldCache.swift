@@ -57,6 +57,7 @@ public final class VPhoneStagedDyldCache {
         private var journalCreated = false
         private var cleared = false
         private var published = false
+        private var unchangedPublication = false
         var recoveryStage: String?
         private var recoveryPlanSHA256: String?
 
@@ -121,7 +122,12 @@ public final class VPhoneStagedDyldCache {
                 let metadata = try bundleDirectory.status(VPhoneStagedDyldCache.pendingName)
                 let journal = metadata.map { $0.st_size <= 65536 && $0.st_mode & S_IFMT == S_IFREG } == true
                     ? (try? JSONDecoder().decode(Journal.self, from: bundleDirectory.readData(VPhoneStagedDyldCache.pendingName))) : nil
-                throw Failure("Unresolved dyld cache publication in \(try bundleDirectory.path). Recovery stage: \(journal?.recoveryStage ?? "unknown; inspect the pending journal"). Boot the SSH ramdisk and run cfw recover-cache before retrying CFW or ordinary boot.")
+                let path = try bundleDirectory.path
+                func quoted(_ value: String) -> String {
+                    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+                }
+                let command = "sudo vphone-cli cfw recover-cache -l \(quoted((path as NSString).deletingLastPathComponent)) \(quoted((path as NSString).lastPathComponent))"
+                throw Failure("Unresolved dyld cache publication in \(path). Recovery stage: \(journal?.recoveryStage ?? "unknown; inspect the pending journal"). Boot the SSH ramdisk and run \(command) before retrying CFW or ordinary boot.")
             }
             if recovering { throw Failure("This VM has no pending cache publication to recover") }
         }
@@ -223,6 +229,21 @@ public final class VPhoneStagedDyldCache {
 
         func publicationSucceeded() { published = true }
 
+        func publicationUnchanged() throws {
+            guard journalIdentity == nil, !journalCreated else {
+                throw Failure("An active cache publication cannot be marked unchanged")
+            }
+            let bundle = try bundleDirectory.metadata()
+            let disk = try bundleDirectory.openRegularFile("Disk.img", requireSingleLink: true)
+            guard bundleIdentity == Identity(device: UInt64(bundle.st_dev), inode: UInt64(bundle.st_ino), size: nil),
+                  diskIdentity == Identity(device: UInt64(disk.device), inode: UInt64(disk.inode), size: Int64(disk.size)),
+                  try !bundleDirectory.exists(VPhoneStagedDyldCache.pendingName) else {
+                throw Failure("VM identity or pending publication changed before the unchanged cache was committed")
+            }
+            unchangedPublication = true
+            published = true
+        }
+
         func releasePublicationLock() { journalFile = nil }
 
         func validateRecoveryPlan(_ manifest: Manifest) throws {
@@ -232,7 +253,7 @@ public final class VPhoneStagedDyldCache {
         }
 
         func requirePublished() throws {
-            guard published, journalIdentity != nil else { throw Failure("Cache publication and guest sync have not completed") }
+            guard published, journalIdentity != nil || unchangedPublication else { throw Failure("Cache publication and guest sync have not completed") }
         }
 
         func clear() throws {
@@ -544,6 +565,19 @@ public final class VPhoneStagedDyldCache {
                   try fingerprint(current.descriptor, name: name) == manifest.before[name]
             else { throw Failure("Destination changed during local patching: \(name)") }
         }
+        let changed = Set(names).union(manifest.before.keys).filter { manifest.after[$0] != manifest.before[$0] }
+            .sorted { left, right in
+                if left == Self.undoName { return false }
+                if right == Self.undoName { return true }
+                return left < right
+            }
+        if changed.isEmpty {
+            try synchronizeGuest()
+            manifest.state = "unchanged"
+            try saveManifest()
+            try pending.publicationUnchanged()
+            return
+        }
         // Make every newly created component of the recovery path durable
         // before a durable journal can refer to it or any remote byte changes.
         guard io.sync(workDirectory.descriptor) == 0 else { throw systemError("Recovery work directory fsync") }
@@ -551,12 +585,6 @@ public final class VPhoneStagedDyldCache {
         try pending.begin(recoveryStage: directory.path, recoveryPlanSHA256: manifest.recoveryPlanSHA256())
         manifest.state = "publishing"
         try saveManifest()
-        let changed = Set(names).union(manifest.before.keys).filter { manifest.after[$0] != manifest.before[$0] }
-            .sorted { left, right in
-                if left == Self.undoName { return false }
-                if right == Self.undoName { return true }
-                return left < right
-            }
         for name in changed {
             manifest.currentFile = name
             try saveManifest()
