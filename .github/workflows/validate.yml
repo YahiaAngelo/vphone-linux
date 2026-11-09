@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '**.py', 'tools/window/**', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '**.py', 'tools/window/**', 'tests/sshramdisk-bootstrap/**', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -64,6 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: SSH ramdisk ECID and signed-artifact regressions
+        run: |
+          bash tests/test-sshramdisk-bootstrap.sh
+          python3 -m unittest discover -s tests -p 'test_sshramdisk_bootstrap.py' -v
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: USB/IP framing and timeout regressions
