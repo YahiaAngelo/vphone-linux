@@ -51,6 +51,25 @@ the `logs.crashes` RPC, and look for a running ReportCrash.
 **Black widgets or wallpaper.** Under heavy CPU starvation, FrontBoard's 10 s scene-create watchdog
 kills the widget renderer and the wallpaper extension. Disabling services fixes it.
 
+**An app is killed a few seconds after it launches.** Its crash report (`logs.crashes`) says
+`scene-create watchdog transgression`, exception code `0x8badf00d`, and SpringBoard's log has
+`Provision violated for watchdog scene-create`. FrontBoard gives an app about 15 s of wall-clock
+time to draw its first frame, and a heavy one (a Unity game, for example) needs more than that on
+emulated CPU: its main thread was busy the whole time while the rest of the guest idled, so this is
+not the starvation above. FrontBoard multiplies the limit by the `FBLaunchWatchdogScale` default of
+`com.apple.springboard`. SpringBoard reads it only when it starts, so set it and restart SpringBoard:
+
+```sh
+tools/vphoned.sh POST /v1/rpc '{"method":"settings.set","params":{"domain":"com.apple.springboard","key":"FBLaunchWatchdogScale","value":40,"type":"float"},"id":1}'
+tools/vphoned.sh POST /v1/rpc '{"method":"services.kickstart","params":{"label":"com.apple.SpringBoard","kill":true,"force":true},"id":1}'
+tools/vphoned.sh POST /v1/rpc '{"method":"screen.unlock","params":{},"id":1}'   # the restart locks the phone
+```
+
+The limit in force is in SpringBoard's log, on the line `Sending scene action [Logical Activate] ...
+(watchdog: 15.74s)`; with 40 it read about 796 s. The default persists across reboots. FrontBoard
+also reads `FBLaunchWatchdogScaleOverride`, `FBLaunchWatchdogResumeScale` and `FBDisableWatchdog`
+(not tried here).
+
 **NVIDIA Xid errors, a lost device, a frozen display.** Run the failing workload under the Vulkan
 validation layer (`tools/validate-run.sh RUN CID BUNDLE_ID`) and report the errors. One such bug, a
 transfer buffer freed while a copy into it was in flight, was fixed in the reims-vgpu fork.
