@@ -396,6 +396,14 @@ usb_helpers() {
 do_restore() {
   usb_helpers
   dry "$T/dfu-stop.sh" "$VM"     # a QEMU left by an earlier, failed attempt
+  # An earlier attempt that failed part way left an APFS container on Disk.img (this restore's
+  # newfs_apfs then fails: "Resource busy"), firmware in nvram.bin and keys in SEPStorage: restore
+  # onto blank ones, as make-bundle.py made them. Nothing on them is kept until this step is done.
+  local f size
+  [ "$DRY" = 1 ] || for f in Disk.img nvram.bin SEPStorage; do
+    size=$(stat -c %s "$VM/$f")
+    truncate -s 0 "$VM/$f" && truncate -s "$size" "$VM/$f"
+  done
   dry "$T/dfu-up.sh" "$VM" "$VM/.runs-dfu"
   dry "$VC" recovery-probe --ecid "$ECID" --timeout 180 || { "$T/dfu-diagnose.sh" "$VM/.runs-dfu"; return 1; }
   # restore-wait.sh: the tool can wait forever for the device to come back after a finished
