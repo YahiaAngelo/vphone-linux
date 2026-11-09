@@ -12,6 +12,7 @@ MESSAGE_RESULT=1 / MESSAGE_LISTEN=3 protocol), with a legacy fallback for the
 
 import ctypes
 import os
+import re
 import select
 import socket
 import struct
@@ -19,8 +20,7 @@ import sys
 import time
 
 SOCKET_PATH = os.environ.get("USBMUXD_SOCKET", "/var/run/usbmuxd")
-# Prefer the device whose serial has this ECID (hex, optional) when several are attached.
-ECID_SERIAL = os.environ.get("VPHONE_ECID", "").upper().removeprefix("0X")
+_NO_ECID = object()
 
 MSG_LISTEN = 3
 MSG_CONNECT = 2
@@ -162,10 +162,58 @@ def connect(device_id, port):
     return sock
 
 
-def candidate_ids(devices):
+def parse_ecid(value):
+    """Parse a project ECID: one to sixteen hex digits, with optional 0x."""
+    value = value.strip()
+    if value[:2].lower() == "0x":
+        value = value[2:]
+    if not re.fullmatch(r"[0-9a-fA-F]{1,16}", value):
+        raise ValueError("VPHONE_ECID must be 1-16 hexadecimal digits, optionally prefixed with 0x")
+    return int(value, 16)
+
+
+def _requested_ecid():
+    if "VPHONE_ECID" not in os.environ:
+        return _NO_ECID
+    return parse_ecid(os.environ["VPHONE_ECID"])
+
+
+def _serial_ecid(serial):
+    """Read ECID from vphone's USB serial or predicted UDID formats."""
+    serial = serial.strip().upper()
+    if serial.startswith("0X"):
+        ecid = serial[2:]
+        return int(ecid, 16) if re.fullmatch(r"[0-9A-F]{16}", ecid) else None
+    if re.fullmatch(r"[0-9A-F]{16}", serial):
+        return int(serial, 16)
+    if re.fullmatch(r"[0-9A-F]{8}[0-9A-F]{16}", serial):
+        return int(serial[-16:], 16)
+    if re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{16}", serial):
+        return int(serial[-16:], 16)
+    return None
+
+
+def candidate_ids(devices, requested_ecid=_NO_ECID):
+    if requested_ecid is _NO_ECID:
+        requested_ecid = _requested_ecid()
+    if requested_ecid is not _NO_ECID:
+        matches = [d[0] for d in devices if _serial_ecid(d[2]) == requested_ecid]
+        label = f"0x{requested_ecid:016X}"
+        if not matches:
+            raise ValueError(f"VPHONE_ECID {label} did not match any listed usbmux device")
+        if len(matches) != 1:
+            raise ValueError(f"VPHONE_ECID {label} matched multiple listed usbmux devices")
+        override = os.environ.get("USBMUX_DEVICE")
+        if override is not None:
+            if not re.fullmatch(r"[0-9]+", override):
+                raise ValueError("USBMUX_DEVICE must be a numeric usbmux handle when VPHONE_ECID is set")
+            if int(override, 10) != matches[0]:
+                raise ValueError(
+                    f"USBMUX_DEVICE {override} does not match the device selected by VPHONE_ECID {label}",
+                )
+        return matches
     if devices:
-        preferred = [d[0] for d in devices if ECID_SERIAL and ECID_SERIAL in d[2].upper()]
-        return preferred + [d[0] for d in devices if d[0] not in preferred]
+        return [d[0] for d in devices]
     override = os.environ.get("USBMUX_DEVICE")
     if override:
         return [int(override)]
@@ -173,12 +221,20 @@ def candidate_ids(devices):
 
 
 def open_port(port, devices=None):
-    if devices is None and os.environ.get("USBMUX_DEVICE"):
+    try:
+        requested_ecid = _requested_ecid()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if devices is None and os.environ.get("USBMUX_DEVICE") and requested_ecid is _NO_ECID:
         devices = []
     elif devices is None:
         devices = list_devices()
     last_error = None
-    for device_id in candidate_ids(devices):
+    try:
+        ids = candidate_ids(devices, requested_ecid)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    for device_id in ids:
         try:
             if os.environ.get("USBMUX_VERBOSE"):
                 print(f"usbmux: connect device {device_id} -> port {port}", file=sys.stderr)
