@@ -140,6 +140,29 @@ Where vCPU time goes while scrolling Settings (per guest process, from the recip
 SpringBoard about 6%, MTLCompilerService about 4%. In every process roughly half of the time is QEMU
 overhead (lookups, TLB refills, helpers) rather than translated guest code.
 
+### GPU stack vphone-next4 (release check, 2026-11-09)
+
+The release's GPU stack (reims-vgpu `310da07`, metal2vulkan `8279756`) against v0.4's (reims-vgpu
+`960bf4b`, metal2vulkan `f359ce2`), both linked into the same QEMU (`108e142`). Guest: iPhone 16
+(iPhone17,3), iOS 26.6.2, as `create-vm.sh` makes it (1x, 430x932), 8 vCPUs, RTX 4080 SUPER, the
+disk image on a USB SSD. Each boot measured boot to unlock, then home-screen paging (12 swipes) and a
+Settings scroll (12 swipes), with reims-vgpu's frame statistics (`REIMS_VGPU_STATS=1`). Warm runs
+reuse the first boot's shader and pipeline caches.
+
+| | New stack | v0.4 stack |
+|---|---|---|
+| Boot to unlock, cold caches | 65 s | 63 s |
+| Boot to unlock, warm (3 boots) | 62, 62, 86 s | 155, 121, 72 s |
+| Settings scroll, warm (frames/s, average) | 51, 71, 58 | 13, 35, 60 |
+| Home-screen paging, warm (frames/s, average) | 30, 24, 38 | 8 (then a 24 s stall), no frames, 26 |
+| Either, cold caches (frames/s) | about 20 | about 20 |
+
+On its good boot the v0.4 stack scrolls and pages as fast as the new one. The new stack's gain here
+is consistency: every boot unlocked in about a minute and drew every swipe, where two of three v0.4
+boots unlocked late and stalled on the home screen. With cold caches both are held to about
+20 frames/s by first-use shader compiles. Single boots vary a lot (other work on the host, iOS's
+background activity), so treat these as indications.
+
 ### Earlier end-to-end measurements
 
 Taken before the latest TCG changes:
