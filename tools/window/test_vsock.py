@@ -165,6 +165,60 @@ class RpcTests(unittest.TestCase):
         self.interrupted = True
         self.test_pending_connect_expires_at_one_deadline()
 
+    def test_response_trickle_cannot_extend_the_request_deadline(self):
+        for phase in ("headers", "body"):
+            with self.subTest(phase=phase):
+                self.now = 100.0
+                self.closed = False
+                self.socket_errors = [0]
+                self.response = b'HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{"result":{}}'
+                first = True
+
+                def recv(size):
+                    nonlocal first
+                    if first and phase == "body":
+                        first = False
+                        head, _, self.response = self.response.partition(b"\r\n\r\n")
+                        return head + b"\r\n\r\n"
+                    elapsed = min(.04, self.sock.timeout)
+                    self.now += elapsed
+                    if elapsed < .04:
+                        raise TimeoutError("fake recv reached its socket deadline")
+                    data, self.response = self.response[:1], self.response[1:]
+                    return data
+
+                with mock.patch.object(self.sock, "recv", side_effect=recv):
+                    with self.assertRaises(TimeoutError):
+                        window.rpc(45, "device.screen", timeout=.1)
+
+                self.assertAlmostEqual(self.now, 100.1)
+                self.assertTrue(self.closed)
+
+    def test_send_uses_only_the_budget_left_after_connect(self):
+        def send(data):
+            self.assertAlmostEqual(self.sock.timeout, .06)
+            self.sent.append(data)
+            self.now += .02
+
+        with mock.patch.object(self.sock, "sendall", side_effect=send):
+            window.rpc(45, "device.screen", timeout=.1)
+
+        self.assertAlmostEqual(self.sock.timeout, .04)
+        self.assertTrue(self.closed)
+
+    def test_no_request_is_sent_after_connect_exhausts_the_deadline(self):
+        window.socket.AF_VSOCK = 40
+
+        def connect(address):
+            self.now += .1
+
+        with mock.patch.object(self.sock, "connect", side_effect=connect):
+            with self.assertRaises(TimeoutError):
+                window.rpc(45, "device.screen", timeout=.1)
+
+        self.assertEqual(self.sent, [])
+        self.assertTrue(self.closed)
+
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "VSOCK uses Linux's socket ABI")
 class KernelLoopbackTests(unittest.TestCase):
