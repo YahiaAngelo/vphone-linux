@@ -166,6 +166,7 @@ Environment variables read by `run-vphone.sh`:
 | `WINDOW` | `0` | `1` opens reims-vgpu's window (sets `REIMS_VGPU_WINDOW`) |
 | `GFX_RES` | the VM's `gfx-res` file, else `1290x2796` | Framebuffer size (`apple-gfx-mmio.resolution`). At 1x `430x932` (`448x932` with the width a multiple of 32: fewer GPU copies, generic layout) |
 | `GFX_MODES` | `$GFX_RES@60` | Display modes offered to the guest (machine `gfx-modes`, `/`-separated) |
+| `GFX_PPI` | unset | Optional explicit physical display density (`apple-gfx-mmio.pixels-per-inch`), an integer from 1 to 65535. The launcher does not read this value from `config.plist`. Set it only when QEMU supports the property. The QEMU version pinned on `development` does not support it. When unset or empty, QEMU keeps its default physical size. When set, the first `GFX_MODES` mode must describe the native physical panel |
 | `GFX_ISOLATION` | `on` | `apple-gfx-mmio.process-isolation`: per-task GPU processes. Keep it on |
 | `REIMS_VGPU_WINDOW_TITLE` | `vphone-linux` | Title of reims-vgpu's window |
 | `VK_DRIVER_FILES` | NVIDIA's ICD if present | Vulkan ICD for QEMU and every GPU task process |

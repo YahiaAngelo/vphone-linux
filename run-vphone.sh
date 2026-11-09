@@ -75,6 +75,23 @@ if [ "${GFX:-0}" = 1 ]; then
   # screens per frame); at 448 the runtime aliases them instead.
   GFX_RES=${GFX_RES:-$(cat "$VM/gfx-res" 2>/dev/null || echo 1290x2796)}
   machine+=",gfx-device=apple-gfx-mmio,memory-backend=ram0,gfx-modes=${GFX_MODES:-$GFX_RES@60}"
+  # Older QEMU builds reject unknown device globals. Forward density only when
+  # the caller opts in and the selected QEMU supports pixels-per-inch.
+  if [ -n "${GFX_PPI:-}" ]; then
+    gfx_ppi=$(python3 - "${GFX_PPI}" <<'PY'
+import sys
+
+value = sys.argv[1]
+if not value.isascii() or not value.isdecimal():
+    sys.exit("run-vphone.sh: GFX_PPI must be an integer from 1 to 65535")
+digits = value.lstrip("0") or "0"
+if len(digits) > 5 or not 1 <= int(digits) <= 65535:
+    sys.exit("run-vphone.sh: GFX_PPI must be an integer from 1 to 65535")
+print(int(digits))
+PY
+    )
+    args+=(-global "apple-gfx-mmio.pixels-per-inch=$gfx_ppi")
+  fi
   # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
   # per-task processes map guest RAM in whole guest pages (memfd has no align)
   # The guest's RAM lives in /dev/shm (a tmpfs, by default half the host's RAM). If it fills
@@ -86,8 +103,8 @@ if [ "${GFX:-0}" = 1 ]; then
     exit 1
   fi
   args+=(-object "memory-backend-file,id=ram0,size=$MEM,mem-path=/dev/shm,share=on,align=2M"
-         -global apple-gfx-mmio.resolution=$GFX_RES
-         -global apple-gfx-mmio.process-isolation=${GFX_ISOLATION:-on})
+         -global "apple-gfx-mmio.resolution=$GFX_RES"
+         -global "apple-gfx-mmio.process-isolation=${GFX_ISOLATION:-on}")
   export REIMS_VGPU_WINDOW=${WINDOW:-0}
   export REIMS_VGPU_WINDOW_TITLE=${REIMS_VGPU_WINDOW_TITLE:-vphone-linux}
   # Every GPU task process must pick the same Vulkan device as QEMU (a task
