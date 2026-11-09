@@ -16,6 +16,8 @@ control socket (REIMS_VGPU_WINDOW_CONTROL). It ends when QEMU does.
   second, a change taken once two reads agree) and rotates the window: open, the guest draws the
   inner display a quarter turn round on the panel, so the window turns it a quarter clockwise and
   goes landscape; closed, the cover is upright.
+- Offers the host's clock to guests with the `clock` capability, once connected, every minute,
+  and after host clock changes or suspend. vphoned preserves manually set guest clocks.
 
 Closing goes open → book → closed: from open flat straight to closed, SpringBoard on this guest
 takes the hinge (its pose reads closed) but never resolves the display mode, and stays on the
@@ -113,23 +115,114 @@ def _response(s, deadline):
     return body if length is None else body[:length]
 
 
+def _request(cid, request, deadline):
+    s = socket.socket(getattr(socket, "AF_VSOCK", 40), socket.SOCK_STREAM)
+    try:
+        _connect_vsock(s, cid, deadline)
+        s.settimeout(_remaining(deadline))
+        s.sendall(request)
+        return json.loads(_response(s, deadline))
+    finally:
+        s.close()
+
+
+def health(cid, timeout=5):
+    return _request(cid, b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                    time.monotonic() + timeout)
+
+
 def rpc(cid, method, timeout=30, **params):
     """A vphoned RPC; the result, or raises RuntimeError with vphoned's message."""
     deadline = time.monotonic() + timeout
     body = json.dumps({"method": method, "params": params, "id": 1}).encode()
-    s = socket.socket(getattr(socket, "AF_VSOCK", 40), socket.SOCK_STREAM)
-    try:
-        _connect_vsock(s, cid, deadline)
-        # vphoned refuses requests whose Host is not localhost.
-        s.settimeout(_remaining(deadline))
-        s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
-                  b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-        r = json.loads(_response(s, deadline))
-    finally:
-        s.close()
+    # vphoned refuses requests whose Host is not localhost.
+    r = _request(cid, b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                 b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body, deadline)
     if "error" in r:
-        raise RuntimeError(f"{method}: {r['error'].get('message')}")
+        error = r["error"]
+        message = error.get("message") if isinstance(error, dict) else "invalid RPC error response"
+        raise RuntimeError(f"{method}: {message}")
     return r["result"]
+
+
+# ------------------------------------------------------------------ host clock
+class ClockSync:
+    INTERVAL = 60
+    RETRY = 5
+    TIMEOUT = 5
+
+    def __init__(self, cid):
+        self.cid = cid
+        self.owner = os.getppid()
+        self.stopping = threading.Event()
+        self.thread = None
+        self.last_outcome = None
+
+    def start(self):
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        self.stopping.set()
+        if self.thread is not None and self.thread.ident is not None:
+            self.thread.join(self.TIMEOUT + .1)
+
+    def _active(self):
+        return not self.stopping.is_set() and os.getppid() == self.owner
+
+    def _run(self):
+        previous_wall, previous_tick = time.time(), time.monotonic()
+        next_send, retrying = 0, False
+        while self._active():
+            now, wall = time.monotonic(), time.time()
+            # CLOCK_MONOTONIC excludes suspend on Linux; wall time also catches clock changes.
+            if not retrying and abs((wall - previous_wall) - (now - previous_tick)) >= 1:
+                next_send = now
+            previous_wall, previous_tick = wall, now
+            if now >= next_send:
+                retrying = not self._send()
+                next_send = time.monotonic() + (self.RETRY if retrying else self.INTERVAL)
+            self.stopping.wait(min(1, max(0, next_send - time.monotonic())))
+
+    def _send(self):
+        if not self._active():
+            return True
+        moved = False
+        try:
+            report = health(self.cid, timeout=self.TIMEOUT)
+            if (not isinstance(report, dict) or report.get("name") != "vphoned"
+                    or report.get("status") != "ok" or not isinstance(report.get("capabilities"), list)):
+                raise RuntimeError("vphoned is not ready for clock sync")
+            if "clock" not in report["capabilities"]:
+                outcome = "guest has no clock capability"
+            elif not self._active():
+                return True
+            else:
+                answer = rpc(self.cid, "time.clock", timeout=self.TIMEOUT, time=time.time())
+                if (not isinstance(answer, dict) or "automatic" not in answer
+                        or (answer["automatic"] is not None and type(answer["automatic"]) is not bool)
+                        or type(answer.get("changed")) is not bool):
+                    raise RuntimeError("guest returned invalid clock state")
+                moved = answer["changed"]
+                if answer["automatic"] is None:
+                    outcome = "guest automatic-clock state is unavailable"
+                elif not answer["automatic"]:
+                    outcome = "guest keeps the time set in its Settings"
+                elif moved:
+                    outcome = "guest clock moved to the host's time"
+                else:
+                    outcome = "guest clock is on the host's time"
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+            outcome = f"could not relay the host clock: {error}"
+            succeeded = False
+        else:
+            succeeded = True
+        if self._active():
+            if moved or outcome != self.last_outcome:
+                log(f"clock: {outcome}")
+            self.last_outcome = outcome
+        return succeeded
 
 
 # ------------------------------------------------------------------ actions
@@ -331,41 +424,47 @@ def main():
             log(f"could not read guest product type: {e}")
     sent_buttons, rotation, pending = None, None, None
 
-    while os.getppid() == owner:
-        if not win.sock and win.connect():
-            log(f"connected to {a.socket}")
-            sent_buttons, rotation = None, None
+    clock = ClockSync(a.cid)
+    try:
+        while os.getppid() == owner:
+            if not win.sock and win.connect():
+                log(f"connected to {a.socket}")
+                sent_buttons, rotation = None, None
+                clock.start()
 
-        buttons = BASE_BUTTONS + (["fold"] if foldable else [])
-        if win.sock and buttons != sent_buttons:
-            win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
-            sent_buttons = buttons
-
-        o = guest.orientation() if foldable is not False else None
-        # The angle is absent until the hinge is first configured, even on a Duo.
-        if o is not None and foldable is None and "fold_angle" in o:
-            foldable = True
-            log("foldable guest")
-            buttons = BASE_BUTTONS + ["fold"]
+            buttons = BASE_BUTTONS + (["fold"] if foldable else [])
             if win.sock and buttons != sent_buttons:
                 win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
                 sent_buttons = buttons
 
-        if foldable and o is not None and o.get("fold_angle") is not None:
-            want = 90 if o["fold_angle"] >= 90 else 0
-            # A change is taken once two reads agree: the hinge sweeps through angles on its way.
-            if want != rotation and want == pending and win.sock:
-                win.send(f"rotate {want}")
-                rotation = want
-                log(f"hinge {o['fold_angle']}°: window rotated {want}°")
-            pending = want
+            o = guest.orientation() if foldable is not False else None
+            # The angle is absent until the hinge is first configured, even on a Duo.
+            if o is not None and foldable is None and "fold_angle" in o:
+                foldable = True
+                log("foldable guest")
+                buttons = BASE_BUTTONS + ["fold"]
+                if win.sock and buttons != sent_buttons:
+                    win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
+                    sent_buttons = buttons
 
-        for line in win.lines(POLL):
-            parts = line.split()
-            if len(parts) == 2 and parts[0] == "button":
-                guest.act(parts[1])
-            else:
-                log(f"unexpected from the window: {line!r}")
+            if foldable and o is not None and o.get("fold_angle") is not None:
+                want = 90 if o["fold_angle"] >= 90 else 0
+                # A change is taken once two reads agree: the hinge sweeps through angles on its way.
+                if want != rotation and want == pending and win.sock:
+                    win.send(f"rotate {want}")
+                    rotation = want
+                    log(f"hinge {o['fold_angle']}°: window rotated {want}°")
+                pending = want
+
+            for line in win.lines(POLL):
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "button":
+                    guest.act(parts[1])
+                else:
+                    log(f"unexpected from the window: {line!r}")
+    finally:
+        clock.stop()
+        win.drop()
 
 
 if __name__ == "__main__":

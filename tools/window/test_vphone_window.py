@@ -139,7 +139,7 @@ class GuestButtonTests(unittest.TestCase):
 
 
 class WindowLoopTests(unittest.TestCase):
-    def run_loop(self, orientations, parent_ids, config=None):
+    def run_loop(self, orientations, parent_ids, config=None, connected=True):
         events = []
         windows = []
         guests = []
@@ -162,8 +162,8 @@ class WindowLoopTests(unittest.TestCase):
                 windows.append(self)
 
             def connect(self):
-                self.sock = object()
-                return True
+                self.sock = object() if connected else None
+                return connected
 
             def send(self, line):
                 events.append(line)
@@ -171,6 +171,9 @@ class WindowLoopTests(unittest.TestCase):
             def lines(self, timeout):
                 self.timeouts.append(timeout)
                 return []
+
+            def drop(self):
+                self.sock = None
 
         parent_ids = iter(parent_ids)
         with tempfile.TemporaryDirectory() as tmp:
@@ -185,11 +188,18 @@ class WindowLoopTests(unittest.TestCase):
                 argv += ["--config", str(config_path)]
             with mock.patch.object(window, "Guest", FakeGuest), \
                 mock.patch.object(window, "Window", FakeWindow), \
+                mock.patch.object(window, "ClockSync") as clock, \
                 mock.patch.object(window, "atlas_for", return_value="mock-atlas.rgba"), \
                 mock.patch.object(window, "log"), \
                 mock.patch.object(window.os, "getppid", side_effect=lambda: next(parent_ids)), \
                 mock.patch.object(window.sys, "argv", argv):
                 window.main()
+                clock.assert_called_once_with(3)
+                if connected:
+                    clock.return_value.start.assert_called_once_with()
+                else:
+                    clock.return_value.start.assert_not_called()
+                clock.return_value.stop.assert_called_once_with()
 
         return events, windows[0], guests[0]
 
@@ -203,6 +213,10 @@ class WindowLoopTests(unittest.TestCase):
         self.assertEqual(guest.reads, 0)
         self.assertEqual(fake_window.timeouts, [window.POLL, window.POLL])
         self.assertNotIn("fold", events[toolbar])
+
+    def test_clock_does_not_start_until_the_window_connects(self):
+        self.run_loop(orientations=[], parent_ids=[77, 77, 77, 0],
+                      config={"guestProductType": "iPhone17,3"}, connected=False)
 
     def test_cold_duo_shows_fold_before_hinge_is_configured_and_keeps_polling(self):
         events, _, guest = self.run_loop(

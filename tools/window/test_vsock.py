@@ -124,6 +124,30 @@ class RpcTests(unittest.TestCase):
         self.assertEqual(self.sock.timeout, 3)
         self.assertTrue(self.closed)
 
+    def test_health_uses_the_shared_bounded_transport(self):
+        report = {"name": "vphoned", "status": "ok", "capabilities": ["clock"]}
+        body = json.dumps(report).encode()
+        self.response = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+
+        self.assertEqual(window.health(7, timeout=.1), report)
+        self.assertTrue(self.sent[0].startswith(b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\n"))
+        self.assertGreater(self.sock.timeout, 0)
+        self.assertLess(self.sock.timeout, .1)
+        self.assertTrue(self.closed)
+
+    def test_rpc_error_envelopes_raise_runtime_errors_and_close(self):
+        for error, message in ((None, "invalid RPC error response"),
+                               ("busy", "invalid RPC error response"),
+                               ({"message": "guest refused"}, "guest refused")):
+            with self.subTest(error=error):
+                self.socket_errors = [0]
+                self.closed = False
+                body = json.dumps({"error": error}).encode()
+                self.response = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+                with self.assertRaisesRegex(RuntimeError, message):
+                    window.rpc(7, "time.clock", timeout=5, time=1_800_000_000.0)
+                self.assertTrue(self.closed)
+
     def test_immediate_connect_does_not_wait(self):
         self.connect_error = 0
         window.rpc(45, "device.screen", timeout=.1)

@@ -61,6 +61,12 @@ Volume up, Volume down, Screenshot, and Fold on a foldable guest (iPhone Duo). `
 starts `tools/window/vphone-window.py` next to QEMU, which does the work; `TOOLBAR=0` leaves the
 window bare.
 
+The companion also relays the host's wall clock after vphoned connects, every minute, and after
+host clock changes or suspend. A separate worker first checks the guest's `clock` capability,
+then offers only `time.clock`'s `time` value. vphoned preserves a clock set manually in Settings.
+The relay does not change automatic-time or time-zone preferences. Requests share a bounded
+deadline, retry sequentially after disconnection, and do not hold the button-action lock.
+
 | Tool | Usage | What it does |
 |---|---|---|
 | `window/vphone-window.py` | started by `run-vphone.sh`; by hand: `tools/window/vphone-window.py SOCKET [--cid CID] [--px 48]` | Talks to the window over its control socket (`REIMS_VGPU_WINDOW_CONTROL`, `$XDG_RUNTIME_DIR/vphone-window-$CID.sock`) and to vphoned over vsock. Sends the bar; turns clicks into `input.button` (home, lock, volume-up, volume-down), `screen.screenshot` (saved to `~/Pictures/vphone/`, with a desktop notification) and `display.posture` (the fold). On a foldable guest it follows the hinge (`display.orientation`'s `fold_angle`) and turns the window a quarter clockwise while the Duo is open, where iOS draws the inner display sideways on the one panel. It ends with QEMU. |
