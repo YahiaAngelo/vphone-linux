@@ -131,7 +131,8 @@ Used by [CREATE-ON-LINUX.md](CREATE-ON-LINUX.md). The ones marked "root" need su
 
 | Tool | Usage | What it does |
 |---|---|---|
-| `gpu-driver-from-cloudos.sh` | `tools/gpu-driver-from-cloudos.sh CLOUDOS.ipsw OUT-DIR` | Gets the GPU driver for `fw prepare --gpu-driver-bundle`: restores the stock cloudOS into a temporary VM over USB/IP, reads `AppleParavirtGPUMetalIOGPUFamily.bundle` from its System volume with 7-Zip, deletes the VM. |
+| `gpu-driver-from-cloudos.sh` | `tools/gpu-driver-from-cloudos.sh CLOUDOS.ipsw OUT-DIR` | Gets the GPU driver for `fw prepare --gpu-driver-bundle`: restores the stock cloudOS into a temporary VM over USB/IP, reads `AppleParavirtGPUMetalIOGPUFamily.bundle` from its System volume with 7-Zip (or, where 7-Zip cannot open the disk, through `apfs-copy-out.sh`), deletes the VM. |
+| `apfs-copy-out.sh` | `tools/apfs-copy-out.sh DISK.img VOLUME PATH DEST-DIR` | Copies a file or folder out of an APFS volume of a VM disk (volume 0 is the System volume), read-only, through this checkout's linux-apfs-rw module. Needs sudo. For hosts whose 7-Zip cannot open iOS disks (7-Zip 26.04: "Cannot open the file as [APFS] archive"). |
 | `new-vm.sh` | `tools/new-vm.sh VM-DIR [ECID]` | Makes an empty VM bundle for a Linux restore: `config.plist` (OpenAVB/OpenSEP, a machine identifier with a random or given ECID), `ecid`, `udid-prediction.txt`, the ROMs and empty sparse disk, NVRAM and SEP storage. |
 | `dfu-up.sh` | `tools/dfu-up.sh VM-DIR RUN-DIR` | Starts the VM with QEMU (`qemu/build`, or `QEMU=`) and `vusb-usbip.py`: in DFU when `nvram.bin` holds no firmware, at iBoot's recovery prompt when it does and `auto-boot=false`. Stops any older exporter first. `GFX=1 WINDOW=1` opens the display window. Logs to `RUN-DIR`; refuses a disk another QEMU holds. |
 | `dfu-stop.sh` | `tools/dfu-stop.sh VM-DIR` | Stops the VM that runs this VM directory's disk and its USB/IP exporter, between the creation steps. |

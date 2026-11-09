@@ -9,7 +9,9 @@
 # restores the stock cloudOS into a temporary VM and reads the driver from its System volume; this
 # does the same on Linux: a temporary bundle (tools/new-vm.sh, OpenAVB/OpenSEP), the IPSW unzipped as
 # its restore tree, a restore over USB/IP, then 7-Zip reads the driver from Disk.img (no root, no
-# mount). The temporary VM is deleted afterwards (KEEP=1 keeps it).
+# mount). Where 7-Zip cannot open the disk (7-Zip 26.04), tools/apfs-copy-out.sh reads it
+# read-only through linux-apfs-rw instead (root). The temporary VM is deleted afterwards (KEEP=1
+# keeps it).
 #
 # Needs, as for any Linux restore: the 32 KiB usbmuxd and the USB/IP attacher running as root
 # (sudo tools/usbmuxd-32k.sh; sudo tools/usbip-autoattach.sh), 7-Zip (7z), and about 5 GB free.
@@ -94,10 +96,20 @@ sleep 3
 
 echo "=== reading the driver from the System volume"
 TMP=$(mktemp -d "$PWD/.build/gpu-driver.XXXXXX")
-7z x "$VM/Disk.img" -o"$TMP" "$BUNDLE" -r -y >/dev/null
-[ -f "$TMP/$BUNDLE/AppleParavirtGPUMetalIOGPUFamily" ] || { echo "driver not found in the restored disk" >&2; exit 1; }
+if 7z x "$VM/Disk.img" -o"$TMP" "$BUNDLE" -r -y >/dev/null 2>&1 &&
+   [ -f "$TMP/$BUNDLE/AppleParavirtGPUMetalIOGPUFamily" ]; then
+  FOUND=$TMP/$BUNDLE
+else
+  # 7-Zip 26.04 (Arch's 7zip) cannot open these containers ("Cannot open the file as [APFS]
+  # archive"): read the System volume (volume 0) through linux-apfs-rw instead, as root.
+  echo "    7-Zip could not read the disk; mounting it read-only through linux-apfs-rw (sudo)"
+  rm -rf "$TMP" && mkdir -p "$TMP"
+  tools/apfs-copy-out.sh "$VM/Disk.img" 0 "${BUNDLE#Volume1/}" "$TMP"
+  FOUND=$TMP/$(basename "$BUNDLE")
+fi
+[ -f "$FOUND/AppleParavirtGPUMetalIOGPUFamily" ] || { echo "driver not found in the restored disk" >&2; exit 1; }
 mkdir -p "$OUT"
-mv "$TMP/$BUNDLE" "$OUT/"
+mv "$FOUND" "$OUT/"
 rm -rf "$TMP"
 echo "=== $OUT/AppleParavirtGPUMetalIOGPUFamily.bundle"
 sha1sum "$OUT/AppleParavirtGPUMetalIOGPUFamily.bundle/AppleParavirtGPUMetalIOGPUFamily"
