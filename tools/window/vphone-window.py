@@ -150,6 +150,9 @@ class ClockSync:
     INTERVAL = 60
     RETRY = 5
     TIMEOUT = 5
+    # vphoned's time.clock can take ~23 s when timed is slow (a few offers of up to 3.3 s each):
+    # a shorter timeout abandons requests that keep running in the guest and piles them up.
+    CLOCK_TIMEOUT = 30
 
     def __init__(self, cid):
         self.cid = cid
@@ -199,20 +202,7 @@ class ClockSync:
             elif not self._active():
                 return True
             else:
-                answer = rpc(self.cid, "time.clock", timeout=self.TIMEOUT, time=time.time())
-                if (not isinstance(answer, dict) or "automatic" not in answer
-                        or (answer["automatic"] is not None and type(answer["automatic"]) is not bool)
-                        or type(answer.get("changed")) is not bool):
-                    raise RuntimeError("guest returned invalid clock state")
-                moved = answer["changed"]
-                if answer["automatic"] is None:
-                    outcome = "guest automatic-clock state is unavailable"
-                elif not answer["automatic"]:
-                    outcome = "guest keeps the time set in its Settings"
-                elif moved:
-                    outcome = "guest clock moved to the host's time"
-                else:
-                    outcome = "guest clock is on the host's time"
+                outcome, moved = self._offer()
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
             outcome = f"could not relay the host clock: {error}"
             succeeded = False
@@ -223,6 +213,26 @@ class ClockSync:
                 log(f"clock: {outcome}")
             self.last_outcome = outcome
         return succeeded
+
+    def _offer(self):
+        """Offer the host time: (outcome, moved). Raises only when the guest could not be asked."""
+        try:
+            answer = rpc(self.cid, "time.clock", timeout=self.CLOCK_TIMEOUT, time=time.time())
+        except RuntimeError as error:
+            # vphoned answered and refused (timed kept its own time, say): asking again in
+            # RETRY seconds would only repeat it, so this counts as done until the next interval.
+            return f"guest refused the host clock: {error}", False
+        if (not isinstance(answer, dict) or "automatic" not in answer
+                or (answer["automatic"] is not None and type(answer["automatic"]) is not bool)
+                or type(answer.get("changed")) is not bool):
+            raise ValueError("guest returned invalid clock state")
+        if answer["automatic"] is None:
+            return "guest automatic-clock state is unavailable", answer["changed"]
+        if not answer["automatic"]:
+            return "guest keeps the time set in its Settings", answer["changed"]
+        if answer["changed"]:
+            return "guest clock moved to the host's time", True
+        return "guest clock is on the host's time", False
 
 
 # ------------------------------------------------------------------ actions
@@ -424,13 +434,15 @@ def main():
             log(f"could not read guest product type: {e}")
     sent_buttons, rotation, pending = None, None, None
 
-    clock = ClockSync(a.cid)
+    # VPHONE_CLOCK_SYNC=0 leaves the guest clock alone (for a guest run at a deliberate offset).
+    clock = ClockSync(a.cid) if os.environ.get("VPHONE_CLOCK_SYNC", "1") != "0" else None
     try:
         while os.getppid() == owner:
             if not win.sock and win.connect():
                 log(f"connected to {a.socket}")
                 sent_buttons, rotation = None, None
-                clock.start()
+                if clock:
+                    clock.start()
 
             buttons = BASE_BUTTONS + (["fold"] if foldable else [])
             if win.sock and buttons != sent_buttons:
@@ -463,7 +475,8 @@ def main():
                 else:
                     log(f"unexpected from the window: {line!r}")
     finally:
-        clock.stop()
+        if clock:
+            clock.stop()
         win.drop()
 
 

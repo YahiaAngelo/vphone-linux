@@ -65,7 +65,8 @@ The companion also relays the host's wall clock after vphoned connects, every mi
 host clock changes or suspend. A separate worker first checks the guest's `clock` capability,
 then offers only `time.clock`'s `time` value. vphoned preserves a clock set manually in Settings.
 The relay does not change automatic-time or time-zone preferences. Requests share a bounded
-deadline, retry sequentially after disconnection, and do not hold the button-action lock.
+deadline, retry sequentially after disconnection, and do not hold the button-action lock. A refusal from the guest waits for the next minute rather than the 5 s retry.
+`VPHONE_CLOCK_SYNC=0` turns the relay off, for a guest run at a deliberate clock offset.
 
 | Tool | Usage | What it does |
 |---|---|---|

@@ -27,7 +27,7 @@ class ClockSyncTests(unittest.TestCase):
     def test_offers_only_host_time_after_capability_check(self):
         self.assertTrue(self.clock._send())
         self.health.assert_called_once_with(7, timeout=5)
-        self.rpc.assert_called_once_with(7, "time.clock", timeout=5, time=1_800_000_000.0)
+        self.rpc.assert_called_once_with(7, "time.clock", timeout=30, time=1_800_000_000.0)
 
     def test_manual_clock_is_left_to_daemon_semantics_without_preference_writes(self):
         self.rpc.return_value = {"automatic": False, "changed": False}
@@ -103,6 +103,15 @@ class ClockSyncTests(unittest.TestCase):
             self.wall.side_effect = lambda: state["wall"]
             self.clock._run()
         return offers, probes
+
+    def test_a_refusal_waits_for_the_next_interval(self):
+        self.rpc.side_effect = RuntimeError("time.clock: timed kept its own time")
+        self.assertTrue(self.clock._send())
+        self.assertIn("refused", self.log.call_args.args[0])
+
+    def test_invalid_clock_state_retries_soon(self):
+        self.rpc.return_value = {"automatic": "yes", "changed": False}
+        self.assertFalse(self.clock._send())
 
     def test_connect_and_minute_schedule(self):
         offers, probes = self.run_schedule(61)

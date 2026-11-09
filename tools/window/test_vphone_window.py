@@ -139,7 +139,7 @@ class GuestButtonTests(unittest.TestCase):
 
 
 class WindowLoopTests(unittest.TestCase):
-    def run_loop(self, orientations, parent_ids, config=None, connected=True):
+    def run_loop(self, orientations, parent_ids, config=None, connected=True, clock_sync=None):
         events = []
         windows = []
         guests = []
@@ -192,8 +192,15 @@ class WindowLoopTests(unittest.TestCase):
                 mock.patch.object(window, "atlas_for", return_value="mock-atlas.rgba"), \
                 mock.patch.object(window, "log"), \
                 mock.patch.object(window.os, "getppid", side_effect=lambda: next(parent_ids)), \
-                mock.patch.object(window.sys, "argv", argv):
+                mock.patch.object(window.sys, "argv", argv), \
+                mock.patch.dict(window.os.environ, {} if clock_sync is None
+                                else {"VPHONE_CLOCK_SYNC": clock_sync}):
+                if clock_sync is None:
+                    window.os.environ.pop("VPHONE_CLOCK_SYNC", None)
                 window.main()
+                if clock_sync == "0":
+                    clock.assert_not_called()
+                    return events, windows[0], guests[0]
                 clock.assert_called_once_with(3)
                 if connected:
                     clock.return_value.start.assert_called_once_with()
@@ -202,6 +209,10 @@ class WindowLoopTests(unittest.TestCase):
                 clock.return_value.stop.assert_called_once_with()
 
         return events, windows[0], guests[0]
+
+    def test_clock_sync_can_be_turned_off(self):
+        self.run_loop(orientations=[], parent_ids=[77, 77, 0],
+                      config={"guestProductType": "iPhone17,3"}, clock_sync="0")
 
     def test_known_phone_shows_toolbar_without_orientation_polling(self):
         events, fake_window, guest = self.run_loop(
