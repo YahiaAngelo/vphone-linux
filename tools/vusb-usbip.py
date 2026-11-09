@@ -425,6 +425,7 @@ class USBIPBridge:
         self.attempt_id = attempt_id
         started = time.monotonic_ns()
         usb_trace("usb.discover.begin", stage_id=self.stage_id, attempt_id=attempt_id)
+        self.guest_config = None   # a reset forgets the guest's configuration (#36)
         setup = lambda value, length: struct.pack("<BBHHH", 0x80, 6, value, 0, length)
         try:
             await self.usb.reset(reset_timeout, attempt_id=attempt_id)
@@ -624,10 +625,19 @@ class USBIPBridge:
                 # starting with this 64-byte device descriptor read. Pass the reset on first, as
                 # DFU's manifestation (the boot ROM starting the uploaded image) waits for it.
                 await self.usb.reset()
+                self.guest_config = None
             if ep == 0:
                 if direction != (1 if setup[0] & 0x80 else 0):
                     raise OSError(errno.EINVAL, "URB direction disagrees with SETUP packet")
-                data = await self.usb.control(setup, payload if direction == 0 else b"")
+                if setup[:2] == b"\x00\x09" and setup[2] in (0, self.guest_config):
+                    # SET_CONFIGURATION to 0, or to the configuration the guest already has:
+                    # opening the device cycles 0 -> 1, and recovery-mode iBoot panics on that
+                    # cycle. The guest keeps its configuration, so answer it here.
+                    data = b""
+                else:
+                    data = await self.usb.control(setup, payload if direction == 0 else b"")
+                    if setup[:2] == b"\x00\x09":
+                        self.guest_config = setup[2]
                 data = data[:length] if direction == 1 else b""
                 actual = len(data) if direction == 1 else len(payload)
             elif direction == 1:
