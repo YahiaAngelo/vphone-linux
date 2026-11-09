@@ -52,8 +52,15 @@ def log(*a):
 
 
 # ------------------------------------------------------------------ vphoned
-def _connect_vsock(s, cid, timeout):
-    s.settimeout(timeout)
+def _remaining(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("vphoned request timed out")
+    return remaining
+
+
+def _connect_vsock(s, cid, deadline):
+    s.settimeout(_remaining(deadline))
     if hasattr(socket, "AF_VSOCK"):
         s.connect((cid, PORT))
         return
@@ -63,7 +70,6 @@ def _connect_vsock(s, cid, timeout):
     connect = ctypes.CDLL(None, use_errno=True).connect
     connect.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
     connect.restype = ctypes.c_int
-    deadline = time.monotonic() + timeout
     s.setblocking(False)
     result = connect(s.fileno(), address, 16)
     error = ctypes.get_errno() if result != 0 else 0
@@ -86,10 +92,11 @@ def _connect_vsock(s, cid, timeout):
     s.settimeout(remaining)
 
 
-def _response(s):
+def _response(s, deadline):
     """One HTTP response's body, up to its Content-Length (vphoned can keep the connection open)."""
     raw = b""
     while b"\r\n\r\n" not in raw:
+        s.settimeout(_remaining(deadline))
         chunk = s.recv(1 << 16)
         if not chunk:
             break
@@ -98,6 +105,7 @@ def _response(s):
     length = next((int(line.split(b":", 1)[1]) for line in head.split(b"\r\n")
                    if line.lower().startswith(b"content-length:")), None)
     while length is None or len(body) < length:
+        s.settimeout(_remaining(deadline))
         chunk = s.recv(1 << 20)
         if not chunk:
             break
@@ -107,14 +115,16 @@ def _response(s):
 
 def rpc(cid, method, timeout=30, **params):
     """A vphoned RPC; the result, or raises RuntimeError with vphoned's message."""
+    deadline = time.monotonic() + timeout
     body = json.dumps({"method": method, "params": params, "id": 1}).encode()
     s = socket.socket(getattr(socket, "AF_VSOCK", 40), socket.SOCK_STREAM)
     try:
-        _connect_vsock(s, cid, timeout)
+        _connect_vsock(s, cid, deadline)
         # vphoned refuses requests whose Host is not localhost.
+        s.settimeout(_remaining(deadline))
         s.sendall(b"POST /v1/rpc HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
                   b"Connection: close\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-        r = json.loads(_response(s))
+        r = json.loads(_response(s, deadline))
     finally:
         s.close()
     if "error" in r:
