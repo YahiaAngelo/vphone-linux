@@ -62,6 +62,16 @@ class USBMuxECIDSelectionTests(unittest.TestCase):
                 (2, 0x1227, self.udid),
             ])
 
+    def test_sole_device_without_an_ecid_serial_is_accepted(self):
+        os.environ["VPHONE_ECID"] = self.ecid
+        stock = (7, 0x12a8, "SSHRD_Script Sep 22 2022 18:56:50")
+        self.assertEqual(usbmux_connect.candidate_ids([stock]), [7])
+        # Never next to another device, and never in place of a device with another ECID.
+        with self.assertRaisesRegex(ValueError, "did not match"):
+            usbmux_connect.candidate_ids([stock, (8, 0x1227, "FFFFFFFFFFFFFFFF")])
+        with self.assertRaisesRegex(ValueError, "did not match"):
+            usbmux_connect.candidate_ids([(8, 0x1227, "FFFFFFFFFFFFFFFF")])
+
     def test_usb_device_override_must_match_the_ecid_device(self):
         devices = [(7, 0x1227, self.compact_serial), (8, 0x1227, "FFFFFFFFFFFFFFFF")]
         os.environ["VPHONE_ECID"] = self.ecid

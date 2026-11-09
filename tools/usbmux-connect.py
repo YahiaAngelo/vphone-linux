@@ -199,6 +199,10 @@ def candidate_ids(devices, requested_ecid=_NO_ECID):
     if requested_ecid is not _NO_ECID:
         matches = [d[0] for d in devices if _serial_ecid(d[2]) == requested_ecid]
         label = f"0x{requested_ecid:016X}"
+        if not matches and len(devices) == 1 and _serial_ecid(devices[0][2]) is None:
+            # The stock SSH ramdisk advertises a build-date serial with no ECID in it, and
+            # `cfw install` always sets VPHONE_ECID: take it, but only as the sole device.
+            matches = [devices[0][0]]
         if not matches:
             raise ValueError(f"VPHONE_ECID {label} did not match any listed usbmux device")
         if len(matches) != 1:
