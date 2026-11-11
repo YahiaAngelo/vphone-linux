@@ -1,3 +1,9 @@
 # AnyObject has no dynamic isEqual on Linux; compare as one-element NSArrays (same Foundation equality).
 CustomFirmware/CustomFirmwareVirtualAudioGraphConfigurations.swift	s/\(have as AnyObject\)\.isEqual\(want\)/NSArray(object: have).isEqual(to: [want])/
 Binary/IM4PHandler.swift	s/compression: lzfseFourCCs\.contains\(original\.fourcc\) \? "lzfse" : nil,/compression: (lzfseFourCCs.contains(original.fourcc) \&\& ProcessInfo.processInfo.environment["VPHONE_NO_LZFSE"] == nil) ? "lzfse" : nil,/
+# Linux has no kmutil (its kernel version is not a macOS one): link only on a host that has it, else over VPHONE_KMUTIL_SSH.
+KernelCache/KernelCollectionBuilder.swift	s#^        if hostLayout == base\.builderLayout \{#        if hostLayout == base.builderLayout, FileManager.default.isExecutableFile(atPath: "/usr/bin/kmutil") {#
+# /private/var/tmp is macOS only: the ssh helper directory is local.
+KernelCache/KernelCollectionBuilder.swift	s#"/private/var/tmp/vphone-ssh\.XXXXXX"#"/var/tmp/vphone-ssh.XXXXXX"#
+# GNU tar renames with --transform (BSD tar's -s is GNU's --same-order).
+KernelCache/KernelCollectionBuilder.swift	s#"-s", ",\^\\\(staged\.lastPathComponent\),\\\(name\),"#"--transform", "s,^\\(staged.lastPathComponent),\\(name),"#

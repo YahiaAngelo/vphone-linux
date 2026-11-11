@@ -26,6 +26,7 @@ linux-create/Sources/
 /OpenAVB/
 /OpenSEP/
 /guest-resources
+/kernelcache_recipes
 /.build/
 /vphone-cli/
 /cpu-tree/

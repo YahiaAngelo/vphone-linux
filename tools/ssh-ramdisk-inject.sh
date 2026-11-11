@@ -62,7 +62,10 @@ DROP=(
     usr/sbin/dietappleh16camerad
     usr/local/bin/wget
     usr/local/bin/procexp
-    usr/standalone/firmware/S6TUUP1
+    # Other devices' firmware and accessory updaters: the restore uses them, the SSH ramdisk
+    # does not, and the iOS 18 ramdisk (168 MB, 25 MB free) has no room for the tools without.
+    usr/standalone/firmware
+    usr/lib/updaters
 )
 for p in "${DROP[@]}"; do
     rm -rf "${MNT:?}/$p"

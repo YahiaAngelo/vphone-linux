@@ -350,10 +350,13 @@ class USBIPBridge:
             version, code, status = struct.unpack("!HHI", header)
             if version != USBIP_VERSION or status:
                 raise ValueError(f"bad USB/IP operation header: {version:#x}/{status}")
-            if code == OP_REQ_DEVLIST:
+            # usbip-utils 2.0 (the omnarchy update of 2026-11-09) sends the request
+            # opcodes without the 0x8000 request bit (0x0003/0x0005); usbip-utils 1.x
+            # sends them with it. Same framing, same replies: accept both.
+            if code in (OP_REQ_DEVLIST, OP_REP_DEVLIST):
                 await self.handle_devlist(writer)
                 return
-            if code == OP_REQ_IMPORT:
+            if code in (OP_REQ_IMPORT, OP_REP_IMPORT):
                 if not await self.handle_import(reader, writer):
                     return
                 self.clients.add(writer)

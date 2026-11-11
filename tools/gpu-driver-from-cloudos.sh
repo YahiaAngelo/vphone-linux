@@ -49,6 +49,8 @@ echo "=== temporary VM $VM"
 tools/new-vm.sh "$VM" >/dev/null
 echo "=== unzipping $(basename "$IPSW") as its restore tree"
 unzip -q "$IPSW" -d "$VM/iPhonePCC_Restore"
+# Some cloudOS zips store their files read-only; the manifest is edited below.
+chmod u+w "$VM/iPhonePCC_Restore/BuildManifest.plist"
 # The temporary VM reports iPhone99,11, which cloudOS releases after the 26.4 beta leave out of
 # SupportedProductTypes; idevicerestore refuses a manifest that does not list the device.
 python3 - "$VM/iPhonePCC_Restore/BuildManifest.plist" <<'PY'

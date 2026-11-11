@@ -12,6 +12,17 @@ set -u
 HOST=127.0.0.1
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0" >&2; exit 1; }
 modprobe vhci-hcd
+# apple-mfi-fastcharge binds the DFU/recovery device and issues SET_CONFIGURATION(1)
+# before usbmuxd/libusb reach it, which leaves the control pipe wedged (descriptor
+# reads error -5 and the recovery iBoot can refuse the next enumeration: issue #32).
+# Unbind the whole module for the boot; the device node's mode comes from the rule below.
+if [ -d /sys/module/apple_mfi_fastcharge ] || modprobe apple_mfi_fastcharge 2>/dev/null; then
+    modprobe -r apple_mfi_fastcharge 2>/dev/null || true
+fi
+CONF=/etc/modprobe.d/50-vphone-no-mfi.conf
+if ! grep -qs -e "blacklist apple_mfi_fastcharge" /etc/modprobe.d/*.conf 2>/dev/null; then
+    echo blacklist apple_mfi_fastcharge > "$CONF"
+fi
 # vphone-cli's libirecovery opens the DFU/recovery device itself, as the user, through libusb.
 # Without a rule the attached device is root-only, libirecovery skips it, and recovery-probe
 # times out ("did not enter dfu/recovery mode in time"). Distros that ship libirecovery's own
@@ -33,6 +44,10 @@ while true; do
   if ! usbip port 2>/dev/null | grep -q "Port in Use"; then
     busid=$(usbip list -r "$HOST" 2>/dev/null | sed -nE 's/^ *([0-9]+-[0-9.]+): .*/\1/p' | head -1)
     if [ -n "$busid" ]; then
+      # Attached by the command's own `sudo usbip attach` before; the whole bus set that
+      # DFU/iBCC/restore/ramdisk modes present is what libirecovery, idevicerestore and
+      # usbmuxd all reach through. Do not filter: recovery-probe opens 05ac:1281 through
+      # libusb (vhci), and without the import it never sees the device.
       if usbip attach -r "$HOST" -b "$busid" 2>/dev/null; then
         echo "$(date +%T) attached $(usbip list -r "$HOST" 2>/dev/null | grep -m1 "$busid:" | sed 's/^ *//')"
       fi

@@ -286,6 +286,8 @@ do_phase release && {
   r="$rel/VPhone.bundle/Contents/Resources"
   ( cd "$VSETUP_SRC"
     ln -sfn "$r/guest-resources" guest-resources
+    # The research board's kernelcache recipes (iOS 18 and other kernelcache-mix pairings)
+    [ -d "$r/kernelcache_recipes" ] && ln -sfn "$r/kernelcache_recipes" kernelcache_recipes
     mkdir -p OpenAVB OpenSEP
     cp "$r/OpenAVB/OpenAVB.bin" OpenAVB/OpenAVB.bin 2>/dev/null || cp "$r/OpenAVB.bin" OpenAVB/OpenAVB.bin
     cp "$r/OpenSEP/OpenSEP.bin" OpenSEP/OpenSEP.bin 2>/dev/null || cp "$r/OpenSEP.bin" OpenSEP/OpenSEP.bin )

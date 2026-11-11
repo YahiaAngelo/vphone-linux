@@ -34,5 +34,32 @@ mkdir -p "$OUT"
 tar -xzf "$CACHE" -C "$OUT"
 rm -f "$OUT/usr/share/misc/magic.mgc"
 rm -rf "$OUT/usr/trollstore"
+# iOS 18's restore ramdisk brings the restore-mode USB (05ac:12a8) up through the stock
+# /usr/local/bin/restored_external (System/Library/AppleUSBDevice/USBDeviceConfiguration.plist):
+# the tarball's launcher just execs dropbear and dies on iOS 18 (OS_REASON_EXEC), leaving the USB
+# dead. Keep the stock stub, and run dropbear from a separate LaunchDaemon (below) instead.
+rm -f "$OUT/usr/local/bin/restored_external"
+mkdir -p "$OUT/System/Library/LaunchDaemons"
+cat > "$OUT/System/Library/LaunchDaemons/com.apple.sshrd.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.apple.sshrd</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/dropbear</string>
+		<string>-E</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/dev/console</string>
+	<key>StandardOutPath</key>
+	<string>/dev/console</string>
+</dict>
+</plist>
+PLIST
 
 echo "=== $OUT: $(find "$OUT" -type f | wc -l) files"

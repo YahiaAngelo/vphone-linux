@@ -22,9 +22,7 @@ LIB=${1:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
 VM=${2:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
 MODE=${3:?usage: restore-tree-mode.sh <library> <vm> ssh|full}
 VC=${VC:-$PWD/linux-create/.build/out/out/Products/Debug-linux-x86_64/vphone-cli}
-SSHRD=${SSHRD:-$PWD/runs/sshramdisk/out/094-39914-031.dmg}
 SSHROOT=${SSHROOT:-$PWD/runs/sshramdisk/ssh-root}
-STOCK_RTSC=${STOCK_RTSC:-$PWD/runs/sshramdisk/stock-094-39914-031.dmg.trustcache}
 
 shopt -s nullglob
 trees=("$LIB/$VM"/*_Restore)
@@ -45,6 +43,9 @@ PY
 }
 
 RD=$(component_path RestoreRamDisk)
+# The SSH ramdisk and stock trust cache are built per restore ramdisk (ssh-ramdisk-rebuild-signed.sh).
+SSHRD=${SSHRD:-$PWD/runs/sshramdisk/out/$RD}
+STOCK_RTSC=${STOCK_RTSC:-$PWD/runs/sshramdisk/stock-$RD.trustcache}
 TC=$(component_path RestoreTrustCache)
 TXM=$(component_path Ap,RestoreTrustedExecutionMonitor)
 SAVED=("$M" "$T/$RD" "$T/$TC" "$T/$TXM")

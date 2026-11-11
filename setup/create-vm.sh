@@ -86,10 +86,12 @@ IFS=$'\t' read -r PAIR_IPSW PAIR_CLOUDOS PAIR_PRESET PAIR_BUILD PAIR_LINUX \
   PAIR_MAC PAIR_MACBUILDER PAIR_NOTE <<< "$PAIR_JSON"
 export PAIR_IPSW PAIR_MAC   # both flags render in the menus
 
-if [ "$PAIR_MACBUILDER" = 1 ]; then
+if [ "$PAIR_MACBUILDER" = 1 ] && [ -z "${VPHONE_KMUTIL_SSH:-}" ]; then
   die "$DEVICE $IOS (cloudOS $PAIR_CLOUDOS) is kernel-first iOS 18: the kernelcache mix
-     must be linked by a macOS kmutil (VPHONE_KMUTIL_SSH) before Linux can boot it.
-     Run that step on a macOS host per vphone-cli's create-and-run.md."
+     must be linked by a macOS kmutil before Linux can boot it. Set
+     VPHONE_KMUTIL_SSH=user@host to a Mac or macOS VM on macOS 15 or 26.0-26.3 with
+     Remote Login, ssh keys and passwordless sudo (an ~/.ssh/config Host alias with
+     ProxyJump works), then run this again."
 fi
 if [ "$PAIR_LINUX" = 0 ] && [ "$DRY" = 0 ]; then
   warn "This pairing is macOS-tested but NOT yet verified on Linux: it is under test."
@@ -214,7 +216,7 @@ fetch() {
   local url=$1 out=$2 want=${3:-} have
   [ -n "$want" ] || want=$(remote_size "$url")
   if [ -s "$out" ]; then
-    have=$(stat -c %s "$out")
+    have=$(stat -L -c %s "$out")
     if [ -z "$want" ] || [ "$have" = "$want" ]; then return 0; fi
     if [ "$have" -lt "$want" ]; then
       warn "  $(basename "$out") is incomplete ($have of $want bytes): resuming it"
@@ -227,11 +229,11 @@ fetch() {
   log "  downloading $(basename "$out")${want:+ ($((want / 1048576)) MiB)}"
   until curl -L --fail --retry 5 --retry-all-errors -C - -o "$out.part" "$url"; do
     # 416: the part is already whole (or larger than the file); anything else: try again.
-    [ -n "$want" ] && [ "$(stat -c %s "$out.part" 2>/dev/null || echo 0)" -ge "$want" ] && break
+    [ -n "$want" ] && [ "$(stat -L -c %s "$out.part" 2>/dev/null || echo 0)" -ge "$want" ] && break
     warn "  the download stopped; resuming in 10 s (Ctrl+C stops; a re-run resumes too)"
     sleep 10
   done
-  have=$(stat -c %s "$out.part")
+  have=$(stat -L -c %s "$out.part")
   if [ -n "$want" ] && [ "$have" != "$want" ]; then
     die "$(basename "$out"): $have bytes downloaded, $want expected; delete $out.part and re-run"
   fi
@@ -287,7 +289,8 @@ do_prepare() {
     dry rm -rf "$tree"
   done
   dry "$VC" fw prepare -l "$VSETUP_DEVICES" "$NAME" \
-      -i "${IPSW_URL:-$IOS_LOCAL}" -c "${CLOUDOS_LOCAL:-$PAIR_CLOUDOS}" \
+      -i "$( [ -s "$IOS_LOCAL" ] && echo "$IOS_LOCAL" || echo "${IPSW_URL:-$IOS_LOCAL}")" \
+      -c "${CLOUDOS_LOCAL:-$PAIR_CLOUDOS}" \
       --gpu-driver-bundle "$gpu_bundle"
 }
 
@@ -419,6 +422,12 @@ if ! done_step patch && done_step prepare && [ -e "$VM/.patch-started" ]; then
   step prepare do_prepare
 fi
 [ "$DRY" = 1 ] || : > "$VM/.patch-started"
+# iOS 18 (kernel-first): link the kernelcache mix on the macOS builder before fw patch.
+do_kernelcache() {
+  [ "$PAIR_MACBUILDER" = 1 ] || return 0
+  dry env VPHONE_KMUTIL_SSH="$VPHONE_KMUTIL_SSH" "$VC" fw kernelcache -l "$VSETUP_DEVICES" "$NAME"
+}
+step kernelcache do_kernelcache
 step patch    do_patch
 step restore  do_restore
 step cfw      do_cfw

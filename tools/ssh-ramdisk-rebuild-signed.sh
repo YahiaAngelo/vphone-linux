@@ -10,22 +10,34 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIB=${1:?usage: ssh-ramdisk-rebuild-signed.sh <library> <vm>   (restore tree in full mode)}
 VM=${2:?usage: ssh-ramdisk-rebuild-signed.sh <library> <vm>}
-STOCK="$ROOT/runs/sshramdisk/stock-094-39914-031.dmg"
-BASE="$ROOT/runs/sshramdisk/base/apfs.img"
+shopt -s nullglob; trees=("$LIB/$VM"/*_Restore)
+[ ${#trees[@]} -eq 1 ] || { echo "expected one *_Restore tree in $LIB/$VM" >&2; exit 1; }
+# The restore ramdisk differs per cloudOS (26.4: 094-39914-031.dmg, 18.7.2: 043-59579-029.dmg):
+# take its name from the tree's manifest, and keep one stock copy and one SSH build per name.
+RD=$(python3 - "${trees[0]}/BuildManifest.plist" <<'PY'
+import plistlib, sys
+m = plistlib.load(open(sys.argv[1], "rb"))
+for bi in m["BuildIdentities"]:
+    c = bi["Manifest"].get("RestoreRamDisk")
+    if c and c.get("Info", {}).get("Path"):
+        print(c["Info"]["Path"]); break
+PY
+)
+[ -n "$RD" ] || { echo "no RestoreRamDisk in ${trees[0]}/BuildManifest.plist" >&2; exit 1; }
+STOCK="$ROOT/runs/sshramdisk/stock-$RD"
+BASE="$ROOT/runs/sshramdisk/base/${RD%.dmg}/apfs.img"
 STAGE="$ROOT/runs/sshramdisk/ssh-root"
 WORK="$ROOT/runs/sshramdisk/base-signed"
 PAYLOAD="$WORK/apfs.img"
-OUT="$ROOT/runs/sshramdisk/out/094-39914-031.dmg"
+OUT="$ROOT/runs/sshramdisk/out/$RD"
 MNT=/mnt/vphone-sshramdisk
 
 # The stock restore ramdisk and its APFS payload come from the VM's restore tree, once.
 if [ ! -f "$STOCK" ]; then
-    shopt -s nullglob; trees=("$LIB/$VM"/*_Restore)
-    [ ${#trees[@]} -eq 1 ] || { echo "expected one *_Restore tree in $LIB/$VM" >&2; exit 1; }
-    [ -e "${trees[0]}/094-39914-031.dmg.full-restore" ] && { echo "tree is in ssh mode; run restore-tree-mode.sh ... full first" >&2; exit 1; }
+    [ -e "${trees[0]}/$RD.full-restore" ] && { echo "tree is in ssh mode; run restore-tree-mode.sh ... full first" >&2; exit 1; }
     mkdir -p "$(dirname "$STOCK")"
-    cp "${trees[0]}/094-39914-031.dmg" "$STOCK"
-    cp "${trees[0]}/Firmware/094-39914-031.dmg.trustcache" "$STOCK.trustcache"
+    cp "${trees[0]}/$RD" "$STOCK"
+    cp "${trees[0]}/Firmware/$RD.trustcache" "$STOCK.trustcache"
 fi
 if [ ! -f "$BASE" ]; then
     mkdir -p "$(dirname "$BASE")"
