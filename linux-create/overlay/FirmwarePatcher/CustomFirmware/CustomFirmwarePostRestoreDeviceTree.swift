@@ -126,6 +126,32 @@ public enum CustomFirmwarePostRestoreDeviceTree {
         }
     }
 
+    /// Enable DriverKit for a virtual iPhone or iPad USB touchscreen, in place.
+    @discardableResult
+    public static func enableVirtualUSBDriverKit(
+        at url: URL,
+        dryRun: Bool = false,
+        verbose: Bool = true,
+    ) throws -> Outcome {
+        try rewrite(at: url, dryRun: dryRun, verbose: verbose) { blob in
+            let (output, changes, delta) = try withVirtualUSBDriverKit(blob)
+            return (output, changes, blob.count + delta)
+        }
+    }
+
+    public static func withVirtualUSBDriverKit(_ blob: Data) throws -> (Data, [Change], Int) {
+        let root = try parseTree(blob, label: "DT")
+        guard let change = try DeviceTreePatcher.enableVirtualUSBDriverKit(in: root) else {
+            return (blob, [], 0)
+        }
+        let record = Change(
+            property: "product/supports-driverkit",
+            before: change.before?.hex ?? "absent",
+            after: change.after.hex,
+        )
+        return (serializeNode(root), [record], change.delta)
+    }
+
     /// Restore only the HomePod mini donor's native MobileGestalt audio product
     /// token, keeping personalized IMG4 data and the payload compression.
     @discardableResult

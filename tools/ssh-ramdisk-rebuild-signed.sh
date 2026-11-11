@@ -2,7 +2,7 @@
 # Build the SSH ramdisk: the stock cloudOS restore ramdisk with the SSH tools from the staging tree
 # (tools/ssh-ramdisk-stage.sh) injected. Downloaded tools retain their signatures;
 # an explicitly selected ECID bootstrap is validated before injection. tools/restore-tree-mode.sh
-# adds their exact code hashes to the trust cache and forces TXM's selector-24 check to pass.
+# adds their exact code hashes to the trust cache and applies native TXM admission.
 #
 # Usage (as your normal user; it asks for sudo once, for the APFS mount):
 #   bash tools/ssh-ramdisk-rebuild-signed.sh <library> <vm>

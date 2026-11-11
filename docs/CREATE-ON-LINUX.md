@@ -253,8 +253,8 @@ requests fail if validation or building fails. They never fall back to the stock
 tools/restore-tree-mode.sh vms myphone ssh      # `full` undoes it
 ```
 
-This swaps in the SSH ramdisk, builds a trust cache that admits its tools, forces TXM's selector-24
-check to pass (`fw patch --restore-txm-precheck`), makes the patched research kernel the restore
+This swaps in the SSH ramdisk, builds a trust cache that admits its tools, applies native TXM
+classification and selector-24 admission (`fw patch --restore-txm-precheck`), makes the patched research kernel the restore
 kernel, and updates the manifest. Keep the tree in `full` mode for a full restore.
 
 **Boot it.** With `auto-boot=false`, OpenAVB loads the restored iLLB and iBoot stops at its recovery

@@ -1,0 +1,10 @@
+{
+  "build": "release.TrustedExecutionMonitor_Guarded-187.100.3",
+  "containerSHA256": "855ebbfc4a8848af49e6f0e045ce19980bed1d5e01876e66c1641005852b9beb",
+  "payloadSHA256": "ebb309715e43f73a0897653dfda131e1e8696f1bb9f61532c14cc383c4784378",
+  "payloadUUID": "E60968C1-64F6-3A1A-90AD-A8311C2A3656",
+  "payloadSize": 442400,
+  "legacyPayloadSHA256": "98e743853a89d1e5ade29d671ce4bfc50c3f5193bee13d98ac9927d9f0ecaff6",
+  "sourceComponent": "Ap,RestoreTrustedExecutionMonitor",
+  "sourcePath": "Firmware/txm.iphoneos.release.im4p"
+}
