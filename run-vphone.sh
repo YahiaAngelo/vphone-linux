@@ -8,7 +8,8 @@
 # (AVPBooter.vresearch1.bin, AVPSEPBooter.vresearch1.bin), plus a file
 # "ecid" with the machine's ECID in hex (from its machineIdentifier).
 #
-# Env: QEMU, SMP (AP cores, default 8), MEM (default 8G), GFX=1 to attach the
+# Env: QEMU, ACCEL (tcg, or kvm on an Apple Silicon host), SMP (AP cores, default 8),
+#      MEM (default 8G), GFX=1 to attach the
 #      reims-vgpu paravirtual GPU, WINDOW=1 for its own window (with a button bar;
 #      TOOLBAR=0 for none), REIMS_VGPU_WINDOW_CONTROL to override its control socket, LOG (-D file),
 #      DFLAGS (-d flags), TRACE (-trace pattern), GDB=<port> to wait for gdb,
@@ -40,8 +41,15 @@ machine="vresearch101,ecid=$ecid,sep-rom=$VM/$seprom_name"
 # TB_SIZE: the TCG code cache in MiB (default 2048, x86-64's limit). An iOS guest keeps ~1.3M
 # translated blocks live at ~18x expansion: the default 1 GiB filled every ~3.5 minutes (14 full
 # flushes in 49 minutes), and every flush retranslates everything the guest runs next.
+# ACCEL=kvm: run the AP cores natively on an Apple Silicon host (Asahi/Omarchy-M) with the
+# linux-aurora-kvm kernel (docs/KVM.md); QEMU keeps the guest's GICs (kernel-irqchip=off).
+if [ "${ACCEL:-tcg}" = kvm ]; then
+  accel=(-accel kvm,kernel-irqchip=off)
+else
+  accel=(-accel "tcg,tb-size=${TB_SIZE:-2048}")
+fi
 args=(
-  -accel "tcg,tb-size=${TB_SIZE:-2048}"
+  "${accel[@]}"
   -smp "$SMP,maxcpus=$((SMP + 1))" -m "$MEM"
   -bios "$VM/$rom_name"
   # nvram.bin is Virtualization.framework aux storage: a 16 KiB header, then

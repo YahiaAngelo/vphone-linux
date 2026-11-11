@@ -1,0 +1,527 @@
+diff --git i/arch/arm64/include/asm/kvm_host.h w/arch/arm64/include/asm/kvm_host.h
+index 7f94635e6..7c521fae5 100644
+--- i/arch/arm64/include/asm/kvm_host.h
++++ w/arch/arm64/include/asm/kvm_host.h
+@@ -309,6 +309,13 @@ enum fgt_group_id {
+ struct kvm_arch {
+ 	struct kvm_s2_mmu mmu;
+ 
++	/*
++	 * Guest pages userspace write-protected with KVM_ARM_SET_WRITE_PROTECT,
++	 * by gfn. Once any has been, stage 2 maps the VM page by page.
++	 */
++	struct xarray wp_gfns;
++	bool has_wp;
++
+ 	/*
+ 	 * Fine-Grained UNDEF, mimicking the FGT layout defined by the
+ 	 * architecture. We track them globally, as we present the
+@@ -367,6 +374,16 @@ struct kvm_arch {
+ #define KVM_ARCH_FLAG_WRITABLE_IMP_ID_REGS		10
+ 	/* Unhandled SEAs are taken to userspace */
+ #define KVM_ARCH_FLAG_EXIT_SEA				11
++	/* HVCs exit to userspace with their immediate (KVM_CAP_ARM_HVC_TO_USER) */
++#define KVM_ARCH_FLAG_HVC_TO_USER			12
++	/* IMPDEF register accesses exit to userspace */
++#define KVM_ARCH_FLAG_IMPDEF_SYSREG_TO_USER		13
++	/* Unbacked fetches and write-protected stores exit to userspace */
++#define KVM_ARCH_FLAG_FAULT_TO_USER			14
++	/* Timer outputs go to userspace even with an in-kernel irqchip */
++#define KVM_ARCH_FLAG_TIMER_TO_USER			15
++	/* GICv3 CPU interface accesses exit to userspace (no in-kernel irqchip) */
++#define KVM_ARCH_FLAG_GIC_SYSREG_TO_USER		16
+ 	unsigned long flags;
+ 
+ 	/* VM-wide vCPU feature set */
+@@ -1504,6 +1521,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
+ 
+ #define kvm_arm_vcpu_sve_finalized(vcpu) vcpu_get_flag(vcpu, VCPU_SVE_FINALIZED)
+ 
++/* Timer outputs reach userspace through kvm_run's device_irq_level. */
++#define kvm_arm_timer_to_user(kvm)					\
++	(!irqchip_in_kernel(kvm) ||					\
++	 test_bit(KVM_ARCH_FLAG_TIMER_TO_USER, &(kvm)->arch.flags))
++
+ #define kvm_has_mte(kvm)					\
+ 	(system_supports_mte() &&				\
+ 	 test_bit(KVM_ARCH_FLAG_MTE_ENABLED, &(kvm)->arch.flags))
+diff --git i/arch/arm64/include/asm/kvm_mmu.h w/arch/arm64/include/asm/kvm_mmu.h
+index 6eae7e7e2..00fd68c67 100644
+--- i/arch/arm64/include/asm/kvm_mmu.h
++++ w/arch/arm64/include/asm/kvm_mmu.h
+@@ -169,6 +169,7 @@ int create_hyp_exec_mappings(phys_addr_t phys_addr, size_t size,
+ int create_hyp_stack(phys_addr_t phys_addr, unsigned long *haddr);
+ void __init free_hyp_pgds(void);
+ 
++int kvm_arm_set_write_protect(struct kvm *kvm, struct kvm_arm_write_protect *wp);
+ void kvm_stage2_unmap_range(struct kvm_s2_mmu *mmu, phys_addr_t start,
+ 			    u64 size, bool may_block);
+ void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
+diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
+index 1c13bfa2d..075945eee 100644
+--- i/arch/arm64/include/uapi/asm/kvm.h
++++ w/arch/arm64/include/uapi/asm/kvm.h
+@@ -208,6 +208,19 @@ struct kvm_arm_counter_offset {
+ 	__u64 reserved;
+ };
+ 
++/*
++ * Guest physical range to write-protect, or to stop write-protecting.
++ * To be used with KVM_ARM_SET_WRITE_PROTECT.
++ */
++#define KVM_ARM_WRITE_PROTECT_ENABLE	(1U << 0)
++
++struct kvm_arm_write_protect {
++	__u64 gpa;
++	__u64 size;
++	__u32 flags;
++	__u32 reserved[3];
++};
++
+ #define KVM_ARM_TAGS_TO_GUEST		0
+ #define KVM_ARM_TAGS_FROM_GUEST		1
+ 
+diff --git i/arch/arm64/kvm/arch_timer.c w/arch/arm64/kvm/arch_timer.c
+index 4155fe89b..ddb206448 100644
+--- i/arch/arm64/kvm/arch_timer.c
++++ w/arch/arm64/kvm/arch_timer.c
+@@ -193,7 +193,7 @@ void get_timer_map(struct kvm_vcpu *vcpu, struct timer_map *map)
+ 
+ static inline bool userspace_irqchip(struct kvm *kvm)
+ {
+-	return unlikely(!irqchip_in_kernel(kvm));
++	return unlikely(kvm_arm_timer_to_user(kvm));
+ }
+ 
+ static void soft_timer_start(struct hrtimer *hrt, u64 ns)
+@@ -697,7 +697,7 @@ static void kvm_timer_vcpu_load_gic(struct arch_timer_context *ctx)
+ 	 */
+ 	kvm_timer_update_irq(vcpu, pending, ctx);
+ 
+-	if (irqchip_in_kernel(vcpu->kvm))
++	if (!userspace_irqchip(vcpu->kvm))
+ 		phys_active = kvm_vgic_map_is_active(vcpu, timer_irq(ctx));
+ 
+ 	phys_active |= pending;
+@@ -1016,7 +1016,7 @@ void kvm_timer_sync_user(struct kvm_vcpu *vcpu)
+ 	if (unlikely(!timer->enabled))
+ 		return;
+ 
+-	if (unlikely(!irqchip_in_kernel(vcpu->kvm)))
++	if (userspace_irqchip(vcpu->kvm))
+ 		unmask_vtimer_irq_user(vcpu);
+ }
+ 
+@@ -1053,7 +1053,7 @@ void kvm_timer_vcpu_reset(struct kvm_vcpu *vcpu)
+ 			kvm_timer_update_irq(vcpu, false,
+ 					     vcpu_get_timer(vcpu, i));
+ 
+-		if (irqchip_in_kernel(vcpu->kvm)) {
++		if (!userspace_irqchip(vcpu->kvm)) {
+ 			kvm_vgic_reset_mapped_irq(vcpu, timer_irq(map.direct_vtimer));
+ 			if (map.direct_ptimer)
+ 				kvm_vgic_reset_mapped_irq(vcpu, timer_irq(map.direct_ptimer));
+@@ -1588,7 +1588,7 @@ int kvm_timer_enable(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 
+ 	/* Without a VGIC we do not map virtual IRQs to physical IRQs */
+-	if (!irqchip_in_kernel(vcpu->kvm))
++	if (userspace_irqchip(vcpu->kvm))
+ 		goto no_vgic;
+ 
+ 	/*
+diff --git i/arch/arm64/kvm/arm.c w/arch/arm64/kvm/arm.c
+index ad04ef4bb..db3e4dfae 100644
+--- i/arch/arm64/kvm/arm.c
++++ w/arch/arm64/kvm/arm.c
+@@ -202,6 +202,36 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
+ 		r = 0;
+ 		set_bit(KVM_ARCH_FLAG_EXIT_SEA, &kvm->arch.flags);
+ 		break;
++	case KVM_CAP_ARM_HVC_TO_USER:
++		r = 0;
++		set_bit(KVM_ARCH_FLAG_HVC_TO_USER, &kvm->arch.flags);
++		break;
++	case KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER:
++		r = 0;
++		set_bit(KVM_ARCH_FLAG_IMPDEF_SYSREG_TO_USER, &kvm->arch.flags);
++		break;
++	case KVM_CAP_ARM_FAULT_TO_USER:
++		r = 0;
++		set_bit(KVM_ARCH_FLAG_FAULT_TO_USER, &kvm->arch.flags);
++		break;
++	case KVM_CAP_ARM_GIC_SYSREG_TO_USER:
++		/* Userspace emulates the GIC, so there must be no vGIC. */
++		mutex_lock(&kvm->lock);
++		if (!kvm->created_vcpus && !irqchip_in_kernel(kvm)) {
++			r = 0;
++			set_bit(KVM_ARCH_FLAG_GIC_SYSREG_TO_USER, &kvm->arch.flags);
++		}
++		mutex_unlock(&kvm->lock);
++		break;
++	case KVM_CAP_ARM_TIMER_TO_USER:
++		/* The timers are wired to the vGIC when the first vCPU runs. */
++		mutex_lock(&kvm->lock);
++		if (!kvm->created_vcpus) {
++			r = 0;
++			set_bit(KVM_ARCH_FLAG_TIMER_TO_USER, &kvm->arch.flags);
++		}
++		mutex_unlock(&kvm->lock);
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -227,6 +257,7 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
+ 		return -EINVAL;
+ 
+ 	mutex_init(&kvm->arch.config_lock);
++	xa_init(&kvm->arch.wp_gfns);
+ 
+ #ifdef CONFIG_LOCKDEP
+ 	/* Clue in lockdep that the config_lock must be taken inside kvm->lock */
+@@ -333,6 +364,7 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
+ 		pkvm_destroy_hyp_vm(kvm);
+ 
+ 	kvm_uninit_stage2_mmu(kvm);
++	xa_destroy(&kvm->arch.wp_gfns);
+ 	kvm_destroy_mpidr_data(kvm);
+ 
+ 	kfree(kvm->arch.sysreg_masks);
+@@ -401,6 +433,11 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_VCPU_EVENTS:
+ 	case KVM_CAP_ARM_IRQ_LINE_LAYOUT_2:
+ 	case KVM_CAP_ARM_NISV_TO_USER:
++	case KVM_CAP_ARM_HVC_TO_USER:
++	case KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER:
++	case KVM_CAP_ARM_FAULT_TO_USER:
++	case KVM_CAP_ARM_TIMER_TO_USER:
++	case KVM_CAP_ARM_GIC_SYSREG_TO_USER:
+ 	case KVM_CAP_ARM_INJECT_EXT_DABT:
+ 	case KVM_CAP_SET_GUEST_DEBUG:
+ 	case KVM_CAP_VCPU_ATTRIBUTES:
+@@ -845,7 +882,7 @@ int kvm_arch_vcpu_runnable(struct kvm_vcpu *v)
+ {
+ 	bool irq_lines = *vcpu_hcr(v) & (HCR_VI | HCR_VF | HCR_VSE);
+ 
+-	irq_lines |= (!irqchip_in_kernel(v->kvm) &&
++	irq_lines |= (kvm_arm_timer_to_user(v->kvm) &&
+ 		      (kvm_timer_should_notify_user(v) ||
+ 		       kvm_pmu_should_notify_user(v)));
+ 
+@@ -1217,7 +1254,7 @@ static bool kvm_vcpu_exit_request(struct kvm_vcpu *vcpu, int *ret)
+ 	 * changes and if so, exit to userspace while updating the run
+ 	 * state.
+ 	 */
+-	if (unlikely(!irqchip_in_kernel(vcpu->kvm))) {
++	if (unlikely(kvm_arm_timer_to_user(vcpu->kvm))) {
+ 		if (unlikely(kvm_irq_update_run(vcpu))) {
+ 			*ret = -EINTR;
+ 			run->exit_reason = KVM_EXIT_INTR;
+@@ -1330,7 +1367,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
+ 			isb(); /* Ensure work in x_flush_hwstate is committed */
+ 			if (kvm_vcpu_has_pmu(vcpu))
+ 				kvm_pmu_sync_hwstate(vcpu);
+-			if (unlikely(!irqchip_in_kernel(vcpu->kvm)))
++			if (unlikely(kvm_arm_timer_to_user(vcpu->kvm)))
+ 				kvm_timer_sync_user(vcpu);
+ 			kvm_vgic_sync_hwstate(vcpu);
+ 			local_irq_enable();
+@@ -1374,7 +1411,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
+ 		 * we don't want vtimer interrupts to race with syncing the
+ 		 * timer virtual interrupt state.
+ 		 */
+-		if (unlikely(!irqchip_in_kernel(vcpu->kvm)))
++		if (unlikely(kvm_arm_timer_to_user(vcpu->kvm)))
+ 			kvm_timer_sync_user(vcpu);
+ 
+ 		if (is_hyp_ctxt(vcpu))
+@@ -1433,7 +1470,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
+ 		ret = handle_exit(vcpu, ret);
+ 	}
+ 
+-	if (unlikely(!irqchip_in_kernel(vcpu->kvm)))
++	if (unlikely(kvm_arm_timer_to_user(vcpu->kvm)))
+ 		kvm_irq_update_run(vcpu);
+ 
+ 	kvm_sigset_deactivate(vcpu);
+@@ -2060,6 +2097,13 @@ int kvm_arch_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
+ 			return -EFAULT;
+ 		return kvm_vm_ioctl_mte_copy_tags(kvm, &copy_tags);
+ 	}
++	case KVM_ARM_SET_WRITE_PROTECT: {
++		struct kvm_arm_write_protect wp;
++
++		if (copy_from_user(&wp, argp, sizeof(wp)))
++			return -EFAULT;
++		return kvm_arm_set_write_protect(kvm, &wp);
++	}
+ 	case KVM_ARM_SET_COUNTER_OFFSET: {
+ 		struct kvm_arm_counter_offset offset;
+ 
+diff --git i/arch/arm64/kvm/handle_exit.c w/arch/arm64/kvm/handle_exit.c
+index 54aedf93c..f5af23ecd 100644
+--- i/arch/arm64/kvm/handle_exit.c
++++ w/arch/arm64/kvm/handle_exit.c
+@@ -41,6 +41,18 @@ static int handle_hvc(struct kvm_vcpu *vcpu)
+ 			    kvm_vcpu_hvc_get_imm(vcpu));
+ 	vcpu->stat.hvc_exit_stat++;
+ 
++	/*
++	 * Userspace emulates every HVC, by its immediate. The PC is already
++	 * past the HVC, as for any exception it raises.
++	 */
++	if (test_bit(KVM_ARCH_FLAG_HVC_TO_USER, &vcpu->kvm->arch.flags)) {
++		vcpu->run->exit_reason = KVM_EXIT_HYPERCALL;
++		vcpu->run->hypercall = (typeof(vcpu->run->hypercall)) {
++			.nr = kvm_vcpu_hvc_get_imm(vcpu),
++		};
++		return 0;
++	}
++
+ 	/* Forward hvc instructions to the virtual EL2 if the guest has EL2. */
+ 	if (vcpu_has_nv(vcpu)) {
+ 		if (vcpu_read_sys_reg(vcpu, HCR_EL2) & HCR_HCD)
+diff --git i/arch/arm64/kvm/mmu.c w/arch/arm64/kvm/mmu.c
+index 6dd5bfc32..2caf3510d 100644
+--- i/arch/arm64/kvm/mmu.c
++++ w/arch/arm64/kvm/mmu.c
+@@ -1762,13 +1762,20 @@ static int pkvm_mem_abort(const struct kvm_s2_fault_desc *s2fd)
+ 	return ret;
+ }
+ 
++static bool kvm_arm_gfn_is_wp(struct kvm *kvm, gfn_t gfn)
++{
++	return READ_ONCE(kvm->arch.has_wp) && xa_load(&kvm->arch.wp_gfns, gfn);
++}
++
+ static short kvm_s2_resolve_vma_size(const struct kvm_s2_fault_desc *s2fd,
+ 				     struct kvm_s2_fault_vma_info *s2vi,
+ 				     struct vm_area_struct *vma)
+ {
+ 	short vma_shift;
+ 
+-	if (memslot_is_logging(s2fd->memslot)) {
++	/* Write protection is per page, so no block may span a protected one. */
++	if (memslot_is_logging(s2fd->memslot) ||
++	    READ_ONCE(s2fd->vcpu->kvm->arch.has_wp)) {
+ 		s2vi->max_map_size = PAGE_SIZE;
+ 		vma_shift = PAGE_SHIFT;
+ 	} else {
+@@ -2018,6 +2025,12 @@ static int kvm_s2_fault_map(const struct kvm_s2_fault_desc *s2fd,
+ 	pfn = s2vi->pfn;
+ 	gfn = s2vi->gfn;
+ 
++	/* Checked under mmu_lock, which KVM_ARM_SET_WRITE_PROTECT takes. */
++	if (kvm_arm_gfn_is_wp(kvm, gfn)) {
++		prot &= ~KVM_PGTABLE_PROT_W;
++		writable = false;
++	}
++
+ 	/*
+ 	 * If we are not forced to use page mapping, check if we are
+ 	 * backed by a huge stage-1 mapping and thus use block mapping if
+@@ -2321,6 +2334,28 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
+ 	memslot = gfn_to_memslot(vcpu->kvm, gfn);
+ 	hva = gfn_to_hva_memslot_prot(memslot, gfn, &writable);
+ 	write_fault = kvm_is_write_fault(vcpu);
++
++	/*
++	 * Userspace handles a fetch from outside any memslot (it may map
++	 * something there and retry) and a store to a page it write-protected.
++	 */
++	if (test_bit(KVM_ARCH_FLAG_FAULT_TO_USER, &vcpu->kvm->arch.flags) &&
++	    ((is_iabt && kvm_is_error_hva(hva)) ||
++	     (!is_iabt && write_fault && !kvm_vcpu_abt_iss1tw(vcpu) &&
++	      !kvm_is_error_hva(hva) && kvm_arm_gfn_is_wp(vcpu->kvm, gfn)))) {
++		u64 far = kvm_vcpu_get_hfar(vcpu);
++		struct kvm_run *run = vcpu->run;
++
++		run->exit_reason = KVM_EXIT_ARM_FAULT;
++		run->arm_fault.flags = (esr & ESR_ELx_FnV) ?
++			0 : KVM_EXIT_ARM_FAULT_FLAG_GVA_VALID;
++		run->arm_fault.esr = esr;
++		run->arm_fault.gva = far;
++		run->arm_fault.gpa = ipa | FAR_TO_FIPA_OFFSET(far);
++		ret = 0;
++		goto out_unlock;
++	}
++
+ 	if (kvm_is_error_hva(hva) || (write_fault && !writable)) {
+ 		/*
+ 		 * The guest has put either its instructions or its page-tables
+@@ -2405,6 +2440,61 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
+ 	return ret;
+ }
+ 
++/*
++ * KVM_ARM_SET_WRITE_PROTECT: guest stores to [gpa, gpa + size) fault to
++ * userspace (KVM_EXIT_ARM_FAULT) while the range is protected. Protecting
++ * unmaps the range, so it faults back in read-only and page by page.
++ */
++int kvm_arm_set_write_protect(struct kvm *kvm, struct kvm_arm_write_protect *wp)
++{
++	bool enable = wp->flags & KVM_ARM_WRITE_PROTECT_ENABLE;
++	gfn_t gfn, start, end;
++	int ret = 0;
++
++	if (!test_bit(KVM_ARCH_FLAG_FAULT_TO_USER, &kvm->arch.flags))
++		return -EINVAL;
++	if ((wp->flags & ~KVM_ARM_WRITE_PROTECT_ENABLE) ||
++	    wp->reserved[0] || wp->reserved[1] || wp->reserved[2])
++		return -EINVAL;
++	if (!wp->size || !PAGE_ALIGNED(wp->gpa) || !PAGE_ALIGNED(wp->size) ||
++	    wp->gpa + wp->size < wp->gpa ||
++	    wp->gpa + wp->size > kvm_phys_size(&kvm->arch.mmu))
++		return -EINVAL;
++
++	start = gpa_to_gfn(wp->gpa);
++	end = gpa_to_gfn(wp->gpa + wp->size);
++
++	if (!enable) {
++		/* A store relaxes the read-only mapping on its own. */
++		for (gfn = start; gfn < end; gfn++)
++			xa_erase(&kvm->arch.wp_gfns, gfn);
++		return 0;
++	}
++
++	/*
++	 * Mark the pages before unmapping them under mmu_lock: a fault that
++	 * maps after the unmap sees the mark, and one already past its checks
++	 * retries on the invalidation.
++	 */
++	WRITE_ONCE(kvm->arch.has_wp, true);
++	for (gfn = start; gfn < end; gfn++) {
++		ret = xa_err(xa_store(&kvm->arch.wp_gfns, gfn, xa_mk_value(1),
++				      GFP_KERNEL_ACCOUNT));
++		if (ret)
++			break;
++		cond_resched();
++	}
++
++	write_lock(&kvm->mmu_lock);
++	kvm_mmu_invalidate_start(kvm);
++	kvm_mmu_invalidate_range_add(kvm, start, end);
++	kvm_stage2_unmap_range(&kvm->arch.mmu, wp->gpa, wp->size, true);
++	kvm_mmu_invalidate_end(kvm);
++	write_unlock(&kvm->mmu_lock);
++
++	return ret;
++}
++
+ bool kvm_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range)
+ {
+ 	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
+diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
+index e566bbce7..82d6c517b 100644
+--- i/arch/arm64/kvm/sys_regs.c
++++ w/arch/arm64/kvm/sys_regs.c
+@@ -5314,6 +5314,37 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+ 
+ 	trace_kvm_handle_sys_reg(esr);
+ 
++	/*
++	 * The reserved IMPLEMENTATION DEFINED encodings (Op0 3, CRn 11 or 15,
++	 * DDI0487 D18.3.2) go to userspace, which emulates the access and
++	 * moves the PC past it.
++	 */
++	if (test_bit(KVM_ARCH_FLAG_IMPDEF_SYSREG_TO_USER, &vcpu->kvm->arch.flags)) {
++		params = esr_sys64_to_params(esr);
++		if (params.Op0 == 3 && (params.CRn & 0b1011) == 0b1011) {
++			vcpu->run->exit_reason = KVM_EXIT_ARM_SYSREG;
++			vcpu->run->arm_sysreg.esr_iss = esr & ESR_ELx_ISS_MASK;
++			return 0;
++		}
++	}
++
++	/*
++	 * The GICv3 CPU interface (ICC_PMR_EL1 and the ICC_* block at CRn 12,
++	 * CRm 8-12) goes to userspace's GIC, in the same exit.
++	 */
++	if (test_bit(KVM_ARCH_FLAG_GIC_SYSREG_TO_USER, &vcpu->kvm->arch.flags) &&
++	    !irqchip_in_kernel(vcpu->kvm)) {
++		params = esr_sys64_to_params(esr);
++		if (params.Op0 == 3 && params.Op1 <= 2 &&
++		    ((params.CRn == 12 && params.CRm >= 8 && params.CRm <= 12) ||
++		     (params.Op1 == 0 && params.CRn == 4 && params.CRm == 6 &&
++		      params.Op2 == 0))) {
++			vcpu->run->exit_reason = KVM_EXIT_ARM_SYSREG;
++			vcpu->run->arm_sysreg.esr_iss = esr & ESR_ELx_ISS_MASK;
++			return 0;
++		}
++	}
++
+ 	if (triage_sysreg_trap(vcpu, &sr_idx))
+ 		return 1;
+ 
+@@ -5793,7 +5824,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+ 	 * This hacks into the ID registers, so only perform it when the
+ 	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
+ 	 */
+-	if (!irqchip_in_kernel(kvm)) {
++	if (!irqchip_in_kernel(kvm) &&
++	    !test_bit(KVM_ARCH_FLAG_GIC_SYSREG_TO_USER, &kvm->arch.flags)) {
+ 		u64 val;
+ 
+ 		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
+@@ -5802,7 +5834,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+ 		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
+ 		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
+ 		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
+-	} else {
++	} else if (irqchip_in_kernel(kvm)) {
+ 		/*
+ 		 * Certain userspace software - QEMU - samples the system
+ 		 * register state without creating an irqchip, then blindly
+diff --git i/include/uapi/linux/kvm.h w/include/uapi/linux/kvm.h
+index 419011097..cb4a099b6 100644
+--- i/include/uapi/linux/kvm.h
++++ w/include/uapi/linux/kvm.h
+@@ -193,6 +193,8 @@ struct kvm_exit_snp_req_certs {
+ #define KVM_EXIT_ARM_SEA          41
+ #define KVM_EXIT_ARM_LDST64B      42
+ #define KVM_EXIT_SNP_REQ_CERTS    43
++#define KVM_EXIT_ARM_SYSREG       44
++#define KVM_EXIT_ARM_FAULT        45
+ 
+ /* For KVM_EXIT_INTERNAL_ERROR */
+ /* Emulate instruction failed. */
+@@ -495,6 +497,18 @@ struct kvm_run {
+ 			__u64 gva;
+ 			__u64 gpa;
+ 		} arm_sea;
++		/* KVM_EXIT_ARM_SYSREG */
++		struct {
++			__u64 esr_iss;
++		} arm_sysreg;
++		/* KVM_EXIT_ARM_FAULT */
++		struct {
++#define KVM_EXIT_ARM_FAULT_FLAG_GVA_VALID	(1ULL << 0)
++			__u64 flags;
++			__u64 esr;
++			__u64 gva;
++			__u64 gpa;
++		} arm_fault;
+ 		/* KVM_EXIT_SNP_REQ_CERTS */
+ 		struct kvm_exit_snp_req_certs snp_req_certs;
+ 		/* Fix the size of the union. */
+@@ -997,6 +1011,11 @@ struct kvm_enable_cap {
+ #define KVM_CAP_S390_KEYOP 247
+ #define KVM_CAP_S390_VSIE_ESAMODE 248
+ #define KVM_CAP_S390_HPAGE_2G 249
++#define KVM_CAP_ARM_HVC_TO_USER 253
++#define KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER 254
++#define KVM_CAP_ARM_FAULT_TO_USER 255
++#define KVM_CAP_ARM_TIMER_TO_USER 256
++#define KVM_CAP_ARM_GIC_SYSREG_TO_USER 257
+ 
+ struct kvm_irq_routing_irqchip {
+ 	__u32 irqchip;
+@@ -1341,6 +1360,8 @@ struct kvm_s390_keyop {
+ /* Available with KVM_CAP_COUNTER_OFFSET */
+ #define KVM_ARM_SET_COUNTER_OFFSET _IOW(KVMIO,  0xb5, struct kvm_arm_counter_offset)
+ #define KVM_ARM_GET_REG_WRITABLE_MASKS _IOR(KVMIO,  0xb6, struct reg_mask_range)
++/* Available with KVM_CAP_ARM_FAULT_TO_USER */
++#define KVM_ARM_SET_WRITE_PROTECT _IOW(KVMIO,  0xd6, struct kvm_arm_write_protect)
+ 
+ /* ioctl for vm fd */
+ #define KVM_CREATE_DEVICE	  _IOWR(KVMIO,  0xe0, struct kvm_create_device)
