@@ -258,6 +258,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: First-boot QMP launcher regression (no VM)
         run: bash setup/test/first-boot-qmp.sh
+      - name: Device-tree scale and first-boot restart regressions (mocked RPC)
+        run: python3 -m unittest discover -s tests -p 'test_guest_dt_scale.py' -v
       - name: Install the suite's dependencies
         run: |
           sudo apt-get update
