@@ -189,8 +189,10 @@ do_sanity() {
   # Check before downloading firmware or restoring a VM, rather than at CFW.
   check_sshrd_bootstrap
   # The VM grows to 20-25 GB, firmware takes ~11 GB in the cache, and the restore tree
-  # needs ~15 GB more while the VM is made: about 60 GB in all.
+  # needs ~15 GB more while the VM is made: about 60 GB before the additional
+  # CFW cache scratch budget, which the installer checks against the actual family.
   check_vm_disk_space
+  check_cfw_disk_space
 }
 
 do_bundle() {

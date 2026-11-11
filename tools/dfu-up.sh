@@ -4,7 +4,9 @@
 #
 #   tools/dfu-up.sh <vm-dir> <run-dir>
 #
-# The VM's Disk.img must hold no bootable system (a fresh, empty one), so AVPBooter stays in DFU.
+# A fresh empty disk enters DFU. For an existing disk, prepare auto-boot=false as
+# in CREATE-ON-LINUX.md. With a pending cache journal, the launcher requires that
+# preparation to succeed before it allows this recovery boot, and retains the journal.
 # Then, as root in other terminals: tools/usbmuxd-32k.sh and tools/usbip-autoattach.sh, and run
 # `vphone-cli restore`. Logs go to <run-dir> (serial.log, stderr.log, qemu.log, usbip.log).
 # Only the QEMU and exporter that a previous dfu-up.sh started for <run-dir> are stopped first.
@@ -59,7 +61,7 @@ rm -f "$SOCK"
 (QEMU=${QEMU:-$PWD/qemu/build/qemu-system-aarch64} CID=0 SMP=${SMP:-8} \
   GFX=${GFX:-0} WINDOW=${WINDOW:-0} \
   DFLAGS=guest_errors LOG=$R/qemu.log timeout 14400 \
-  ./run-vphone.sh "$VM" -chardev socket,id=vusb,path=$SOCK,server=on,wait=off \
+  ./run-vphone.sh --dfu "$VM" -chardev socket,id=vusb,path=$SOCK,server=on,wait=off \
   -global vresearch-vusb.chardev=vusb > "$R/serial.log" 2> "$R/stderr.log" &)
 for _ in $(seq 1 30); do [ -S "$SOCK" ] && break; sleep 1; done
 [ -S "$SOCK" ] || { echo "QEMU did not start; see $R/stderr.log" >&2; exit 1; }

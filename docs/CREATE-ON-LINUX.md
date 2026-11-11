@@ -306,10 +306,10 @@ sudo $VC cfw install -l vms myphone --work-parent "${VPHONE_CFW_WORK_PARENT:-/va
   small files, and the host disk barely grows for minutes at a time while it copies; it is not stuck.
 - It needs rcodesign (found on `PATH`, in `~/.cargo/bin` of the user who ran sudo, or at
   `$VPHONE_RCODESIGN`) and the APFS driver from SETUP step 3 (`modprobe apfs`, else
-  `$VPHONE_APFS_KO`, else `.build/linux-apfs-rw/apfs.ko`). It also needs about 8 GB of working space
-  on the filesystem selected for `--work-parent`. Set `VPHONE_CFW_WORK_PARENT` to select a
+  `$VPHONE_APFS_KO`, else `.build/linux-apfs-rw/apfs.ko`). Local cache staging needs four times the selected cache family and existing undo-log size plus 1 GiB free on the filesystem selected for `--work-parent`. An optional pristine seed needs five times the family size plus 1 GiB. Firmware images and other CFW work need additional space. The installer checks the cache budget before copying the OS cryptex into the guest and again before local staging. Set `VPHONE_CFW_WORK_PARENT` to select a
   different path; it defaults to `/var/tmp`. The `cfw` command retains ownership and permission
   checks on the selected directory.
+- Before firmware download or restore, `setup/create-vm.sh` checks the selected CFW work-parent filesystem. It refuses 1 GiB or less free and warns below the 25 GiB estimate for a 6 GiB cache family. The exact measured budget remains mandatory later. Set `VPHONE_CFW_WORK_PARENT=/path/on/a/larger/filesystem` before creation to choose another filesystem.
 - It renames the xART gigalocker to `AA.gl`, installs vphoned and the launchd hook, and ends with
   `[+] Linux guest install complete` and a new `PatchReceipt.plist`.
 - Without `--keep-artifacts` the restore tree is deleted at the end (12 GB back; a new restore then
@@ -317,6 +317,26 @@ sudo $VC cfw install -l vms myphone --work-parent "${VPHONE_CFW_WORK_PARENT:-/va
 
 If an install fails halfway, look for leftover root sshfs mounts (`findmnt -l | grep vphone-cfw`)
 and unmount them with `fusermount3 -u` before retrying.
+
+### Recover a pending cache publication
+
+A `.vphone-dsc-pending.json` entry fences ordinary boot until the cache family is consistent and synchronized. Preserve this journal for recovery. Stop the failed installer, then repeat step 4 for the same VM. `tools/dfu-up.sh` preserves the journal and requires `auto-boot=false` preparation before allowing a journaled VM to start in recovery mode.
+
+This recovery contract covers iOS and iPadOS. Linux tvOS CFW is blocked before guest volumes are mounted or changed because standalone `usr/lib/dyld` and its cached copy need a shared recoverable transaction. Do not clear a tvOS journal with cache-only rollback.
+
+With the SSH ramdisk and its mounted filesystems ready, run:
+
+```sh
+sudo "$VC" cfw recover-cache -l vms myphone --work-parent "${VPHONE_CFW_WORK_PARENT:-/var/tmp}"
+```
+
+This command compares the selected ECID with the publisher's journal before contacting the guest. It verifies the bound VM and disk, both retained cache copies, and the current guest bytes, then restores the original family in place and requires guest sync before clearing the journal. Recovery can be retried after an interrupted write or sync. New journals lock out a second publisher or recovery process. For an older version 1 journal, first confirm that the original command has exited and the selected bundle retains its original guest ECID, then add `--legacy-journal`.
+
+Publication writes and reads back only changed cache files. An unchanged patched family needs no journal or remote cache write, but it still requires full staging, layout and guest preimage checks, and guest sync. Rollback skips files already matching their original hashes. The full scratch budget still applies.
+
+Recover promptly: host tmpfiles policies can expire `/var/tmp` stages after 30 days or another configured age. Both retained copies are required for rollback. If a completed fresh DFU restore makes the old journal inapplicable, follow [the explicit journal archival procedure](../linux-create/README.md#after-a-fresh-dfu-restore). Verify the exact VM, ECID, completed restore, stopped processes and backing files before archiving anything.
+
+After successful recovery, rerun the interrupted installer command. Recovery does not complete CFW or write its patch receipt. If cache publication had already completed and a later installer step failed, the cache boot fence is already cleared and the installer can be retried directly. See [the cache recovery contract](../linux-create/README.md#cache-publication-and-recovery).
 
 ## 6. Finish and first boot
 

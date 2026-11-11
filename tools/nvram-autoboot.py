@@ -34,6 +34,7 @@ device-recovery-boot-reason behind and sends every later boot back to recovery.
 """
 
 import argparse
+import os
 import struct
 import sys
 import zlib
@@ -100,6 +101,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--auto-boot", choices=["true", "false"], default="true",
                         help="value for auto-boot (default true; use false to let the ROM stop in DFU)")
+    parser.add_argument("--require-auto-boot", action="store_true",
+                        help="require the requested value in every valid bank; fail if a common partition is missing")
     parser.add_argument("--boot-args", metavar="TEXT",
                         help="set boot-args to TEXT (empty string removes it); for diagnostics, "
                              "e.g. --boot-args '-v serial=3', which makes iBoot and the kernel print "
@@ -122,6 +125,8 @@ def main() -> int:
         region = common_data(data, base, length)
         if region is None:
             print(f"bank 0x{base:x}: no 'common' partition", file=sys.stderr)
+            if args.require_auto_boot:
+                return 1
             continue
         start, end = region
         block = bytes(data[start:end])
@@ -149,6 +154,8 @@ def main() -> int:
                 dropped.append(entry.decode("utf-8", "replace"))
             else:
                 kept.append(entry)
+        if args.require_auto_boot and not any(entry.startswith(b"auto-boot=") for entry in kept):
+            kept.insert(0, b"auto-boot=" + args.auto_boot.encode())
         if args.boot_args:
             # Insert right after auto-boot, where the list was just shortened.
             index = next((i + 1 for i, e in enumerate(kept) if e.startswith(b"auto-boot=")), len(kept))
@@ -188,6 +195,14 @@ def main() -> int:
         return 0
     with open(args.nvram, "wb") as handle:
         handle.write(bytes(data))
+        handle.flush()
+        os.fsync(handle.fileno())
+    if args.require_auto_boot:
+        with open(args.nvram, "rb") as handle:
+            written = handle.read()
+        if written != bytes(data) or list(find_banks(written)) != banks:
+            print("NVRAM readback or bank verification failed", file=sys.stderr)
+            return 1
     print(f"wrote {args.nvram}")
     return 0
 

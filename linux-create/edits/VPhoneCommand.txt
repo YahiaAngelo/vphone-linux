@@ -15,8 +15,10 @@ Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func restoreTree/func res
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func applyGuestPatches/func applyGuestPatches/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func patchPreboot/func patchPreboot/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func recordGuestReceipt/func recordGuestReceipt/
+Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func writeGuestReceipt/func writeGuestReceipt/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func installSignedDaemonCopy/func installSignedDaemonCopy/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func configuredGuestDevice/func configuredGuestDevice/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func guestDevice/func guestDevice/
+Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func pinBundle/func pinBundle/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/private func stageBoardDeviceTree/func stageBoardDeviceTree/
 Host/VPhoneHostAutomationProbe.swift	/var noSigPipe/,/^        \}$/d

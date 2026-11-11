@@ -375,6 +375,7 @@ DRY=0
 die() { printf '%s\\n' "$*" >&2; exit 1; }
 warn() { printf '%s\\n' "$*" >&2; }
 check_vm_disk_space() { :; }
+check_cfw_disk_space() { :; }
 step() { if [ "$1" = sanity ] && [ "${SKIP_SANITY:-0}" = 1 ]; then return 0; fi; shift; "$@"; }
 do_bundle() { ECID=$(cat "$VM/ecid" 2>/dev/null || true); }
 do_firmware() { printf '%s\\n' "${VPHONE_ECID-__UNSET__}" > "$ARG_LOG"; }

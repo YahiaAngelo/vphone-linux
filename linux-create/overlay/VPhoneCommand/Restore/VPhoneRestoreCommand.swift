@@ -237,6 +237,7 @@ struct VPhoneCustomFirmwareCommand: ParsableCommand {
         abstract: "Custom-firmware install (host-mount; VM must be off)",
         subcommands: [
             VPhoneCustomFirmwareInstallCommand.self,
+            VPhoneCustomFirmwareRecoverCacheCommand.self,
             VPhoneCustomFirmwareUpdateKernelCommand.self,
             VPhoneCustomFirmwareInstallRootCommand.self,
             VPhoneCustomFirmwareUpdateEnvironmentCommand.self,
@@ -306,6 +307,39 @@ struct VPhoneCustomFirmwareFlipSnapshotCommand: ParsableCommand {
 
     func run() throws {
         try VPhoneAPFSSnapshot.rename(imageAt: image, newPrefix: newPrefix, dryRun: dryRun)
+    }
+}
+
+struct VPhoneCustomFirmwareRecoverCacheCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "recover-cache",
+        abstract: "Roll back a pending Linux cache publication through the SSH ramdisk",
+        discussion: """
+        Stop the failed CFW command and boot this VM into its SSH ramdisk.
+        Verifies the journal's VM/disk identity and retained before/after
+        copies, restores the original cache family, then requires guest sync
+        before removing the boot fence. This does not complete CFW or write
+        its patch receipt. Rerun cfw install or update-environment afterward.
+        """
+    )
+
+    @OptionGroup var lib: VPhoneLibraryOption
+    @Argument(help: "VM name") var name: String?
+    @Option(name: .customLong("work-parent"), help: "Root-owned private CFW temporary directory")
+    var workParent = VPhoneCustomFirmwareInstaller.defaultWorkParent
+    @Flag(name: .customLong("legacy-journal"), help: "Recover a pre-lock journal after confirming its command has stopped and this is its original guest ECID")
+    var legacyJournal = false
+
+    func run() throws {
+        #if os(Linux)
+        let name = try VPhoneVirtualMachineSelection.resolveExisting(name, in: lib.library)
+        let bundle = try lib.library.bundle(named: name)
+        try VPhoneCustomFirmwareInstaller(
+            bundle: bundle.url, resources: VPhoneResources.resolve(), workParent: workParent
+        ).recoverLinuxCache(allowLegacyJournal: legacyJournal)
+        #else
+        throw ValidationError("Cache recovery through the SSH ramdisk is available on Linux only.")
+        #endif
     }
 }
 

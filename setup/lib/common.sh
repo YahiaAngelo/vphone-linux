@@ -37,6 +37,22 @@ check_vm_disk_space() {
   done
 }
 
+check_cfw_disk_space() {
+  local parent=${VPHONE_CFW_WORK_PARENT:-/var/tmp} existing available
+  [[ "$parent" = /* ]] || die "VPHONE_CFW_WORK_PARENT must be an absolute path"
+  existing=$parent
+  while [ ! -e "$existing" ]; do existing=$(dirname -- "$existing"); done
+  [ -d "$existing" ] || die "CFW work parent is not a directory: $existing"
+  available=$(LC_ALL=C df -Pk -- "$existing" | awk 'NR == 2 { print $4 }') ||
+    die "cannot measure free space for CFW work parent $parent"
+  [[ "$available" =~ ^[0-9]+$ ]] || die "cannot measure free space for CFW work parent $parent"
+  if [ "$available" -le 1048576 ]; then
+    die "CFW work parent $parent has only $available KiB free: more than the 1 GiB reserve is required before cache staging (set VPHONE_CFW_WORK_PARENT to a larger filesystem)"
+  elif [ "$available" -lt 26214400 ]; then
+    warn "CFW work parent $parent has $available KiB free: a 6 GiB cache family needs about 25 GiB; the installer will measure the selected family and require 4 times its size plus 1 GiB"
+  fi
+}
+
 ensure_vphone_cli_source() {
   local src=$1 fresh=0 actual expected origin selected_origin tag
   local fetch_args=()

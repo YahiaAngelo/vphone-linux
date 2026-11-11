@@ -33,6 +33,12 @@ for argument; do directory=$argument; done
 printf '%s\n' "$directory" >> "$DF_CAPTURE"
 available=80
 if [[ "$directory" == "${DF_LOW_SPACE_PATH:-}" ]]; then available=10; fi
+for argument; do
+  if [ "$argument" = -Pk ]; then
+    printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\nmock 100000000 1 %s 1%% /\n' "${DF_AVAILABLE_KIB:-83886080}"
+    exit 0
+  fi
+done
 printf 'Filesystem 1G-blocks Used Available Use%% Mounted on\nmock 100G 1G %sG 1%% /\n' "$available"
 EOF
 chmod +x "$tmp/bin/df"
@@ -77,5 +83,36 @@ grep -Fq "only 10 GB free under $cache" <<< "$output" || {
   echo 'FAIL: low-space diagnostic did not name the configured cache path' >&2
   exit 1
 }
+
+work_parent="$tmp/CFW work parent"
+mkdir -p "$work_parent"
+sed -n '/^do_sanity() {$/,/^}$/p' "${VPHONE_TEST_CREATE_VM:-$repo/setup/create-vm.sh}" > "$tmp/do-sanity.sh"
+mkdir -p "$tmp/sanity-source/OpenAVB" "$tmp/sanity-source/OpenSEP"
+touch "$tmp/cli" "$tmp/qemu" "$tmp/sanity-source/OpenAVB/OpenAVB.bin" "$tmp/sanity-source/OpenSEP/OpenSEP.bin"
+for available in 0 1048576; do
+  # shellcheck disable=SC2016
+  if output=$(DF_CAPTURE="$tmp/cfw-paths" DF_AVAILABLE_KIB="$available" \
+    PATH="$tmp/bin:$PATH" VPHONE_CFW_WORK_PARENT="$work_parent/not-created" \
+    DRY=0 VC="$tmp/cli" QEMU_RUN="$tmp/qemu" VSETUP_SRC="$tmp/sanity-source" \
+    bash -c 'source "$1/setup/lib/common.sh"; source "$2"; check_vm_disk_space() { :; }; check_sshrd_bootstrap() { :; }; do_sanity' \
+      bash "$repo" "$tmp/do-sanity.sh" 2>&1); then
+    echo 'FAIL: insufficient CFW reserve was accepted before restore' >&2
+    exit 1
+  fi
+  grep -Fq 'more than the 1 GiB reserve is required' <<< "$output"
+done
+# A smaller cache may fit here. Warn about the estimate without rejecting it.
+# shellcheck disable=SC2016
+output=$(DF_CAPTURE="$tmp/cfw-paths" DF_AVAILABLE_KIB=1048577 \
+  PATH="$tmp/bin:$PATH" VPHONE_CFW_WORK_PARENT="$work_parent/not-created" \
+  bash -c 'source "$1/setup/lib/common.sh"; check_cfw_disk_space' bash "$repo" 2>&1)
+grep -Fq 'a 6 GiB cache family needs about 25 GiB' <<< "$output"
+grep -Fxq "$work_parent" "$tmp/cfw-paths"
+[ ! -e "$work_parent/not-created" ] || { echo 'FAIL: preflight created the CFW work parent'; exit 1; }
+# shellcheck disable=SC2016
+output=$(DF_CAPTURE="$tmp/cfw-paths" DF_AVAILABLE_KIB=26214400 \
+  PATH="$tmp/bin:$PATH" VPHONE_CFW_WORK_PARENT="$work_parent" \
+  bash -c 'source "$1/setup/lib/common.sh"; check_cfw_disk_space' bash "$repo" 2>&1)
+[ -z "$output" ] || { echo 'FAIL: sufficient CFW planning space still warned'; exit 1; }
 
 echo 'OK'
