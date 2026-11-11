@@ -438,7 +438,7 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
             return
         }
         if restoreTXMPrecheck {
-            try patchRestoreTXMPrecheck(vmDirectory: directory, preset: resolved)
+            try patchRestoreTXMPrecheck(vmDirectory: directory, selection: selection, preset: resolved)
             return
         }
 
@@ -492,6 +492,17 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
             throw ValidationError("No kernelcache.release.vphone600 in \(restoreDir.path).")
         }
 
+        let pipeline = restoreKernelPipeline(vmDirectory: vmDirectory, selection: selection, preset: preset)
+        _ = try pipeline.patchKernelcacheFile(at: kernel, iOSBase: nil, cloudOS: nil)
+        try refreshManifest(in: restoreDir)
+        print("[fw patch] patched \(kernel.lastPathComponent) and refreshed BuildManifest.plist")
+    }
+
+    private func restoreKernelPipeline(
+        vmDirectory: URL,
+        selection: VPhoneVirtualMachinePatchSelection,
+        preset: VPhonePatchPreset,
+    ) -> FirmwarePipeline {
         let identifiers: Set<String> = [
             "kernel-boot-amfi_trustcache",
             "kernel-boot-amfi_execve",
@@ -505,7 +516,7 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
             "kernel-boot-dyld_policy",
             "kernel-boot-load_dylinker",
         ]
-        let pipeline = FirmwarePipeline(
+        return FirmwarePipeline(
             vmDirectory: vmDirectory,
             variant: .jb,
             verbose: !quiet,
@@ -514,9 +525,6 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
             blockedPatches: Set(selection.blockedPatches),
             allowedPatches: identifiers,
         )
-        _ = try pipeline.patchKernelcacheFile(at: kernel, iOSBase: nil, cloudOS: nil)
-        try refreshManifest(in: restoreDir)
-        print("[fw patch] patched \(kernel.lastPathComponent) and refreshed BuildManifest.plist")
     }
 
     /// The restore boot chain also loads `Firmware/txm.iphoneos.release.im4p`
@@ -544,7 +552,11 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
 
     /// Apply the shared native-classification policy to the release restore TXM.
     /// The policy pre-check is preserved; the guest's research TXM is untouched.
-    private func patchRestoreTXMPrecheck(vmDirectory: URL, preset: VPhonePatchPreset) throws {
+    private func patchRestoreTXMPrecheck(
+        vmDirectory: URL,
+        selection: VPhoneVirtualMachinePatchSelection,
+        preset: VPhonePatchPreset,
+    ) throws {
         let restoreDir = try restoreDirectory(in: vmDirectory)
         let txm = restoreDir.appendingPathComponent("Firmware/txm.iphoneos.release.im4p")
         guard FileManager.default.fileExists(atPath: txm.path) else {
@@ -558,7 +570,11 @@ struct VPhoneFirmwarePatchCommand: ParsableCommand {
             noBinpack: true,
             preset: preset,
         )
-        let count = try pipeline.patchRestoreTXMPrecheckFile(at: txm)
+        let kernelPlan = try restoreKernelPipeline(
+            vmDirectory: vmDirectory, selection: selection, preset: preset,
+        ).resolvePlan(iOSBase: nil, cloudOS: nil)
+        let kernelGate = kernelPlan.map { VPhonePatchGate(plan: $0) } ?? .unrestricted
+        let count = try pipeline.patchRestoreTXMPrecheckFile(at: txm, restoreKernelGate: kernelGate)
         try refreshManifest(in: restoreDir)
         print("[fw patch] applied \(count) TXM admission patches to \(txm.lastPathComponent) and refreshed BuildManifest.plist")
     }

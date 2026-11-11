@@ -86,11 +86,13 @@ stub; the production wrapper keeps `/usr/bin/ssh`. The connection check also pas
 connector path through the real FUSE option parser and OpenSSH to a local stub that exits
 without network or USB access. These checks do not create mounts or verify a guest installation.
 
-The DriverKit adapter and native restore-TXM admission require CLI source containing `edaa02f0`
-and `af560830`; neither `2.14.2` nor `2.15.2` contains these APIs. Development validation uses
-the explicit source revision `cb23353eb61b74186bc0b345fe34e6868b733746`, with the selected CLI's
-patch manifests. The default source and public guest-resource pins stay unchanged pending a
-compatible release and native validation.
+The DriverKit adapter and native restore-TXM admission use CLI `2.16.1`
+(`d1c36fa89e09edab046482b6e88241f1f7288099`), including its shared DriverKit/TXM APIs,
+CoreFoundation imports, optimized-build repair, and missing-profile compatibility. The extra
+TXM site follows the restore kernel's resolved AMFI trust-cache policy; disabled profile waivers
+remain disabled, and incomplete native admission is refused before writing. The Linux
+CoreFoundation shim repair must accompany this source. The default source and public
+guest-resource pins stay unchanged pending iOS 18 restore-TXM and native validation.
 
 The release-TXM regression uses a private, pristine `txm.iphoneos.release.im4p` from TXM
 `187.100.3`. Only its identity metadata is tracked. With Swift 6.4.1 and synchronized sources:
@@ -102,7 +104,7 @@ VPHONE_RESTORE_TXM_187_100_3=/private/firmware/txm.iphoneos.release.im4p \
 
 The fixture checks are skipped when the variable is unset. They exercise the actual Swift
 patcher and container writer on private copies, including refusal without writes for changed
-cache/classifier or incomplete selector-24 sites. SSH ramdisk boot, normal guest boot, and
+cache/classifier/profile or incomplete selector-24 sites. SSH ramdisk boot, normal guest boot, and
 touchscreen input remain separate native checks.
 
 Unsupported restore-TXM layouts fail before writing. The error includes the embedded

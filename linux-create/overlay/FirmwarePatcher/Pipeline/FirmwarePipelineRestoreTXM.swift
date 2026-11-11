@@ -28,15 +28,22 @@ extension FirmwarePipeline {
     /// Admit the SSH ramdisk's signatures through native classification.
     /// Requires pristine restore firmware; leaves the policy pre-check and
     /// executable-mapping restrictions intact. No other dev patches apply.
+    /// Pass the resolved restore-kernel gate; the unrestricted default preserves
+    /// direct callers that do not select a preset.
     @discardableResult
-    public func patchRestoreTXMPrecheckFile(at url: URL) throws -> Int {
+    public func patchRestoreTXMPrecheckFile(
+        at url: URL, restoreKernelGate: VPhonePatchGate = .unrestricted,
+    ) throws -> Int {
         let image = try IM4PHandler.load(contentsOf: url)
-        let patcher = TXMDevPatcher(data: image.payload, verbose: verbose)
+        // IM4P payload slices can start after zero; matchers use file offsets.
+        let payload = Data(image.payload)
+        let patcher = TXMDevPatcher(data: payload, verbose: verbose)
+        patcher.gate = restoreKernelGate
         do {
-            try RestoreTXMNativePrecheck.validate(image.payload)
+            try RestoreTXMNativePrecheck.validate(payload)
             try patcher.patchExecutableRemap()
             patcher.patchSelector24ForcePass()
-            let required: Set<String> = [
+            var required: Set<String> = [
                 "txm-boot-trustcache_bypass",
                 "txm-cfw-executable_remap.cms",
                 "txm-cfw-executable_remap.adhoc",
@@ -45,6 +52,10 @@ extension FirmwarePipeline {
                 "txm-boot-selector24_bypass.mov",
                 "txm-boot-selector24_bypass.b",
             ]
+            // AMFI trust-cache hits skip the native profile association.
+            if restoreKernelGate.isEnabled("kernel-boot-amfi_trustcache") {
+                required.insert("txm-cfw-executable_remap.missing_profile")
+            }
             guard patcher.patches.count == required.count,
                   Set(patcher.patches.map(\.patchID)) == required else {
                 throw PatcherError.patchSiteNotFound(
@@ -53,7 +64,7 @@ extension FirmwarePipeline {
             }
         } catch {
             throw PatcherError.patchSiteNotFound(
-                "restore TXM \(RestoreTXMNativePrecheck.buildLabel(in: image.payload)) is unsupported: \(error)",
+                "restore TXM \(RestoreTXMNativePrecheck.buildLabel(in: payload)) is unsupported: \(error)",
             )
         }
         let count = try patcher.apply()

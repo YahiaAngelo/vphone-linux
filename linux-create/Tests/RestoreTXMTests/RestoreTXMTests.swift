@@ -42,6 +42,19 @@ struct RestoreTXMTests {
         FirmwarePipeline(vmDirectory: url.deletingLastPathComponent(), variant: .jb, verbose: false, noBinpack: true)
     }
 
+    private func restoreKernelGate(
+        selection: VPhonePatchSelection, blocked: Set<String> = [],
+    ) throws -> VPhonePatchGate {
+        var preset = FirmwarePatchSetCatalog.standardPreset
+        preset.selection = selection
+        let plan = try VPhonePatchPlan.resolve(
+            preset: preset, patchSets: FirmwarePatchSetCatalog.bundled,
+            iOSBase: nil, cloudOS: nil, blocked: blocked,
+            allowed: ["kernel-boot-amfi_trustcache"],
+        )
+        return VPhonePatchGate(plan: plan)
+    }
+
     @Test(arguments: [
         ("TrustedExecutionMonitor_Guarded-999.1.2\0", "TrustedExecutionMonitor_Guarded-999.1.2"),
         ("no embedded build", "unknown build"),
@@ -87,8 +100,10 @@ struct RestoreTXMTests {
             expected.replaceSubrange(0x33080 ..< 0x33088, with:
                 try #require(ARM64Encoder.encodeMovzW(rd: 21, imm16: 7))
                     + #require(ARM64Encoder.encodeB(from: 0x33084, to: 0x32f50)))
+            expected.replaceSubrange(0x313cc ..< 0x313d4, with:
+                try #require(ARM64Encoder.encodeMovzW(rd: 0, imm16: 0xa6)) + ARM64.nop)
 
-            #expect(try pipeline(url).patchRestoreTXMPrecheckFile(at: url) == 7)
+            #expect(try pipeline(url).patchRestoreTXMPrecheckFile(at: url) == 8)
             let output = try IM4PHandler.load(contentsOf: url)
             #expect(output.payload == expected)
             #expect(output.im4p?.fourcc == container?.fourcc)
@@ -98,6 +113,72 @@ struct RestoreTXMTests {
                 let rebuiltStart = try #require(IM4PHandler.paypStart(in: rebuilt))
                 #expect(input[start...] == rebuilt[rebuiltStart...])
             }
+        }
+    }
+
+    @Test(.enabled(if: fixture != nil))
+    func acceptsUncompressedPristineContainer() throws {
+        try withFixture { url, original in
+            let container = try IM4PHandler.load(contentsOf: url).im4p
+            try IM4PHandler.save(patchedData: original, originalIM4P: container, to: url)
+            let roundtrip = try IM4PHandler.load(contentsOf: url).payload
+            try #require(roundtrip == original)
+            #expect(try pipeline(url).patchRestoreTXMPrecheckFile(at: url) == 8)
+        }
+    }
+
+    @Test(.enabled(if: fixture != nil), arguments: [false, true], [false, true])
+    func followsResolvedKernelProfilePolicy(allowList: Bool, blockedByVM: Bool) throws {
+        let amfi = "kernel-boot-amfi_trustcache"
+        let selection: VPhonePatchSelection = allowList
+            ? .allow(["txm-boot-trustcache_bypass", "txm-cfw-executable_remap", "txm-boot-selector24_bypass"])
+            : .block([amfi])
+        let gate = try restoreKernelGate(selection: selection, blocked: blockedByVM ? [amfi] : [])
+        try #require(gate.isEnabled(amfi) == !blockedByVM)
+        try withFixture { url, original in
+            let count = try pipeline(url).patchRestoreTXMPrecheckFile(at: url, restoreKernelGate: gate)
+            #expect(count == (blockedByVM ? 7 : 8))
+            let output = Data(try IM4PHandler.load(contentsOf: url).payload)
+            let profile = 0x313cc ..< 0x313d4
+            let expected: Data
+            if blockedByVM {
+                expected = original.subdata(in: profile)
+            } else {
+                expected = try #require(ARM64Encoder.encodeMovzW(rd: 0, imm16: 0xa6)) + ARM64.nop
+            }
+            #expect(output.subdata(in: profile) == expected)
+        }
+    }
+
+    @Test(.enabled(if: fixture != nil))
+    func refusesDisabledRequiredRemapWithoutWriting() throws {
+        let gate = try restoreKernelGate(selection: .all, blocked: ["txm-cfw-executable_remap"])
+        try withFixture { url, _ in
+            let before = try Data(contentsOf: url)
+            do {
+                _ = try pipeline(url).patchRestoreTXMPrecheckFile(at: url, restoreKernelGate: gate)
+                Issue.record("disabled required remap was applied")
+            } catch let error as PatcherError {
+                #expect(error.description.contains("requires complete native-classification and selector-24 patches"))
+            }
+            #expect(try Data(contentsOf: url) == before)
+        }
+    }
+
+    @Test(.enabled(if: fixture != nil))
+    func refusesChangedMissingProfileExitWithoutWriting() throws {
+        try withFixture { url, original in
+            var changed = original
+            changed.replaceSubrange(0x313cc ..< 0x313d0, with: ARM64.nop)
+            try IM4PHandler.save(patchedData: changed, originalIM4P: IM4PHandler.load(contentsOf: url).im4p, to: url)
+            let before = try Data(contentsOf: url)
+            do {
+                _ = try pipeline(url).patchRestoreTXMPrecheckFile(at: url)
+                Issue.record("changed missing-profile exit was accepted")
+            } catch let error as PatcherError {
+                #expect(error.description.contains("TXM missing-profile compatibility"))
+            }
+            #expect(try Data(contentsOf: url) == before)
         }
     }
 
@@ -184,9 +265,9 @@ struct RestoreTXMTests {
             try #require(removed > 0)
             let native = TXMDevPatcher(data: changed, verbose: false)
             try native.patchExecutableRemap()
-            try #require(native.patches.count == 5)
+            try #require(native.patches.count == 6)
             native.patchSelector24ForcePass()
-            try #require(native.patches.count == 5)
+            try #require(native.patches.count == 6)
             try IM4PHandler.save(patchedData: changed, originalIM4P: IM4PHandler.load(contentsOf: url).im4p, to: url)
             let before = try Data(contentsOf: url)
             #expect(throws: PatcherError.self) { try pipeline(url).patchRestoreTXMPrecheckFile(at: url) }
