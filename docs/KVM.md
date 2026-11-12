@@ -108,24 +108,35 @@ a framebuffer (stock: 1024 pieces, 64 MiB):
 reims-vgpu (branch `vphone-kvm`) needs `+lse,+rcpc` for aarch64 Linux (`.cargo/config.toml`).
 With these the boot draws the Apple logo and progress bar.
 
-## The remaining hangs (under investigation)
+## The hangs: `hvc` that doesn't trap (worked around)
 
-Three symptoms, one cause so far: a spinning `hvc #0x80ae; cmp x14, #0; b.ne .` (GXF_STATUS
-check with a stale x14), the kernel's bad-stack or PAC `brk #0xc472` halt with the other CPUs
-parked in SPTM, and SPTM `VIOLATION_*` panics. Each traces to a patched `hvc` that runs without
-trapping to KVM: KVM's own trace shows no trap, while memory and the shadow translations hold
-the patched instruction. Seen at the lower-EL vector (`hvc 0x1340` at VBAR+0x400) and the
-GXF_STATUS check, often right after EL0 SPRR permission emulation (JIT) or `madvise` loops, on
-both core types. Ruled out: QEMU register write-backs, unpatched copies, the shadow pool's
-reuse, instruction-cache staleness (`ic iallu` in the flush stub), interrupt delivery.
+Three symptoms had one cause: a spinning `hvc #0x80ae; cmp x14, #0; b.ne .` (GXF_STATUS check
+with a stale x14), the kernel's bad-stack or PAC `brk #0xc472` halt with the other CPUs parked
+in SPTM, and SPTM `VIOLATION_*` panics. On the M1 under KVM a patched `hvc` occasionally runs
+without trapping (KVM's trace shows no exit; memory and the shadow translations hold the patched
+instruction). Seen at the lower-EL vector (`hvc 0x1340` at VBAR+0x400) and the GXF_STATUS check,
+on both core types, only inside the iOS guest: the reproducers `kvm/hvc-stress.c` and
+`kvm/hvc-stress2.c` (a mini-kernel doing what XNU does around those `hvc`s) never skipped one
+in over 600M traps. Ruled out: QEMU register write-backs, unpatched copies, shadow-pool reuse,
+I-cache staleness, interrupt delivery, ACTLR, KVM's PC/exception injection.
+
+The fix: patched traps are trapped IMPDEF sysreg accesses instead,
+`msr/mrs S3_<op1>_C11_C<crm>_<op2>, X<rt>` with the 16-bit hvc immediate packed into
+read:1 op1:3 crm:4 op2:3 rt:5 (`apple_virt_trap_insn`). KVM forwards them as
+`IMPDEF_SYSREG_TO_USER` exits; `kvm_arm_handle_sysreg` unpacks the immediate, steps the PC and
+calls `kvm_arm_handle_hvc`. They always trap: 20 min (GFX=0) and 37 min (GFX=1) boots with the
+skip detectors armed caught nothing. `VR_TRAP_HVC=1` goes back to `hvc`.
 
 `VR_CATCH_CORRUPT=1` enables the instrumentation (exit rings with timestamps, invariant checks,
-trapped check spin `0x13ff`, skip detector `0x13fc` after the vector's `hvc`, translation
-dumps); `VR_VECTOR_ISB=1` puts an `isb` before the vector's `hvc`; `VR_POOL_AGED=<n>` changes
-shadow-table reuse. Pair them with the kernel trace on `trace_clock=mono` to match exits.
+trapped check spin `0x13ff`, skip detector `0x13fc` after the vector's trap, translation
+dumps); `VR_VECTOR_ISB=1` puts an `isb` before the vector's trap; `VR_POOL_AGED=<n>` changes
+shadow-table reuse.
 
 ## Open items
 
-- Why a patched `hvc` sometimes doesn't trap (above); then boot to SpringBoard.
+- Framebuffer fetch on Borealis: metal2vulkan refuses pipelines that read their colour
+  attachments (no rasterization-order access, no pixel interlock), so the SpringBoard migrator
+  hangs at ~87% of the progress bar.
+- Why the M1 lets a guest `hvc` through untrapped (worked around above).
 - A guest reboot: the hand-over to GXF/PAC emulation and the image patching are one-way.
 - Clean-up: the debug switches, and upstreaming the kernel's CLIDR/TID behaviour notes.
