@@ -100,17 +100,25 @@ PY
     )
     args+=(-global "apple-gfx-mmio.pixels-per-inch=$gfx_ppi")
   fi
-  # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
-  # per-task processes map guest RAM in whole guest pages (memfd has no align)
-  # The guest's RAM lives in /dev/shm (a tmpfs, by default half the host's RAM). If it fills
-  # up, the guest's next new page kills QEMU with SIGBUS and no message: check first.
-  need=$(numfmt --from=iec "$MEM") shm=$(( $(stat -f -c '%a * %S' /dev/shm) ))
-  if [ "$need" -gt "$shm" ]; then
-    echo "run-vphone.sh: /dev/shm has $(numfmt --to=iec "$shm") free, the guest's RAM needs $MEM." >&2
-    echo "  Free it up (other VMs, browsers), or enlarge it: sudo mount -o remount,size=12G /dev/shm" >&2
-    exit 1
+  # On a 16 KiB-page host (Apple Silicon) the guest's pages are the host's, so the RAM can be a
+  # sealed memfd, which udmabuf takes: the GPU imports its pages as dma-bufs there, as Asahi's
+  # Vulkan driver imports no host pointer. Elsewhere it lives in /dev/shm.
+  if [ "$(getconf PAGESIZE)" -ge 16384 ]; then
+    ram_backend="memory-backend-memfd,id=ram0,size=$MEM,share=on,seal=on"
+  else
+    # A shared file mapping aligned past the guest's 16 KiB pages: reims-vgpu's
+    # per-task processes map guest RAM in whole guest pages (memfd has no align).
+    # The guest's RAM lives in /dev/shm (a tmpfs, by default half the host's RAM). If it fills
+    # up, the guest's next new page kills QEMU with SIGBUS and no message: check first.
+    need=$(numfmt --from=iec "$MEM") shm=$(( $(stat -f -c '%a * %S' /dev/shm) ))
+    if [ "$need" -gt "$shm" ]; then
+      echo "run-vphone.sh: /dev/shm has $(numfmt --to=iec "$shm") free, the guest's RAM needs $MEM." >&2
+      echo "  Free it up (other VMs, browsers), or enlarge it: sudo mount -o remount,size=12G /dev/shm" >&2
+      exit 1
+    fi
+    ram_backend="memory-backend-file,id=ram0,size=$MEM,mem-path=/dev/shm,share=on,align=2M"
   fi
-  args+=(-object "memory-backend-file,id=ram0,size=$MEM,mem-path=/dev/shm,share=on,align=2M"
+  args+=(-object "$ram_backend"
          -global "apple-gfx-mmio.resolution=$GFX_RES"
          -global "apple-gfx-mmio.process-isolation=${GFX_ISOLATION:-on}")
   export REIMS_VGPU_WINDOW=${WINDOW:-0}

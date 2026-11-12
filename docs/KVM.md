@@ -94,9 +94,38 @@ exception it takes plus each SPTM call's result (x1 holds SPTM's panic string on
 mismatches; `BDIF_WHO=<disk offset>` prints the guest call stack that reads that offset. gdb works
 with `-gdb tcp::1234 -S` (hardware breakpoints; watchpoints don't fire under KVM).
 
+## GPU on Asahi
+
+Asahi's Vulkan driver imports no host pointer (`VK_EXT_external_memory_host`), only dma-bufs.
+metal2vulkan (branch `vphone-kvm`) then makes no-copy buffers over dma-bufs of the guest's pages,
+which reims-vgpu creates with `/dev/udmabuf`. For that, `run-vphone.sh` puts guest RAM in a
+sealed memfd on 16 KiB-page hosts (udmabuf takes only memfds), and udmabuf's limits must cover
+a framebuffer (stock: 1024 pieces, 64 MiB):
+
+    echo 65536 | sudo tee /sys/module/udmabuf/parameters/list_limit
+    echo 2048  | sudo tee /sys/module/udmabuf/parameters/size_limit_mb
+
+reims-vgpu (branch `vphone-kvm`) needs `+lse,+rcpc` for aarch64 Linux (`.cargo/config.toml`).
+With these the boot draws the Apple logo and progress bar.
+
+## The remaining hangs (under investigation)
+
+Three symptoms, one cause so far: a spinning `hvc #0x80ae; cmp x14, #0; b.ne .` (GXF_STATUS
+check with a stale x14), the kernel's bad-stack or PAC `brk #0xc472` halt with the other CPUs
+parked in SPTM, and SPTM `VIOLATION_*` panics. Each traces to a patched `hvc` that runs without
+trapping to KVM: KVM's own trace shows no trap, while memory and the shadow translations hold
+the patched instruction. Seen at the lower-EL vector (`hvc 0x1340` at VBAR+0x400) and the
+GXF_STATUS check, often right after EL0 SPRR permission emulation (JIT) or `madvise` loops, on
+both core types. Ruled out: QEMU register write-backs, unpatched copies, the shadow pool's
+reuse, instruction-cache staleness (`ic iallu` in the flush stub), interrupt delivery.
+
+`VR_CATCH_CORRUPT=1` enables the instrumentation (exit rings with timestamps, invariant checks,
+trapped check spin `0x13ff`, skip detector `0x13fc` after the vector's `hvc`, translation
+dumps); `VR_VECTOR_ISB=1` puts an `isb` before the vector's `hvc`; `VR_POOL_AGED=<n>` changes
+shadow-table reuse. Pair them with the kernel trace on `trace_clock=mono` to match exits.
+
 ## Open items
 
-- Boot past launchd's early tasks to SpringBoard; compare timing with TCG.
-- The GPU path (reims-vgpu on Asahi's Vulkan driver) and the display.
+- Why a patched `hvc` sometimes doesn't trap (above); then boot to SpringBoard.
 - A guest reboot: the hand-over to GXF/PAC emulation and the image patching are one-way.
 - Clean-up: the debug switches, and upstreaming the kernel's CLIDR/TID behaviour notes.
