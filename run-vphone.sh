@@ -48,6 +48,16 @@ if [ "${ACCEL:-tcg}" = kvm ]; then
 else
   accel=(-accel "tcg,tb-size=${TB_SIZE:-2048}")
 fi
+# A VM dir with a Disk.qcow2 (an overlay over Disk.img, `qemu-img create -f qcow2 -F raw -b ...`)
+# writes the guest's disk there and leaves Disk.img untouched: the firmware reads Disk.img
+# read-only (a qcow2 may be opened once only), and the root disk is the overlay.
+if [ -f "$VM/Disk.qcow2" ]; then
+  disk_pflash=(-drive "file=$VM/Disk.img,if=pflash,format=raw,readonly=on,file.locking=off")
+  disk_root=(-drive "file=$VM/Disk.qcow2,if=none,id=root-pci,format=qcow2")
+else
+  disk_pflash=(-drive "file=$VM/Disk.img,if=pflash,format=raw,file.locking=off")
+  disk_root=(-drive "file=$VM/Disk.img,if=none,id=root-pci,format=raw,file.locking=off")
+fi
 args=(
   "${accel[@]}"
   -smp "$SMP,maxcpus=$((SMP + 1))" -m "$MEM"
@@ -55,10 +65,10 @@ args=(
   # nvram.bin is Virtualization.framework aux storage: a 16 KiB header, then
   # the firmware store (HUFA) AVPBooter reads through the backdoor device
   -drive "file=$VM/nvram.bin,if=pflash,format=raw,offset=16384,file.locking=off"
-  -drive "file=$VM/Disk.img,if=pflash,format=raw,file.locking=off"
+  "${disk_pflash[@]}"
   # The firmware backdoor reads this disk during boot; XNU also expects the
   # root APFS disk to be present as an Apple VirtIO PCI storage device.
-  -drive "file=$VM/Disk.img,if=none,id=root-pci,format=raw,file.locking=off"
+  "${disk_root[@]}"
   # Virtualization.framework also exposes the auxiliary storage as an "aux"
   # virtio-blk device; the RestoreOS builds its IONVRAM service from it. Like the pflash, it
   # starts past the 16 KiB aux-storage header: without the offset the restore writes the
