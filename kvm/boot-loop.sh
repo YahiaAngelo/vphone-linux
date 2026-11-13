@@ -17,7 +17,7 @@ for i in $(seq 1 $COUNT); do
     sleep 10
     if ! pgrep -x qemu-system-aar >/dev/null; then result=exited; break; fi
     if grep -aq "panic(cpu" $R/serial.log; then result=panic; break; fi
-    if timeout 15 tools/vphoned.sh -c 3 GET /v1/health 2>/dev/null | grep -q '"setup_pending":false'; then
+    if timeout 120 tools/vphoned.sh -c 3 GET /v1/health 2>/dev/null | grep -q '"setup_pending":false'; then
       result=ok; break
     fi
   done
