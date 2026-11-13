@@ -58,10 +58,77 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..075945eee 100644
+index 1c13bfa2d..9d3bab0f8 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
-@@ -208,6 +208,19 @@ struct kvm_arm_counter_offset {
+@@ -158,6 +158,66 @@ struct kvm_sync_regs {
+ 	__u64 device_irq_level;
+ };
+ 
++/*
++ * Apple guests (KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER): the exception entries and returns
++ * userspace patched into IMPDEF traps, taken in the kernel when it publishes the PAC key
++ * sets here, at KVM_ARM_APPLE_FAST_OFFSET in run->s.padding (past device_irq_level).
++ */
++#define KVM_ARM_APPLE_FAST_OFFSET	64
++#define KVM_ARM_APPLE_FAST_MAGIC	0x3130545341464150ULL	/* "PAFAST01" */
++struct kvm_arm_apple_fast {
++	__u64 magic;		/* userspace: MAGIC to enable, anything else disables */
++	__u64 pstate_mask;	/* userspace: the PSTATE bits an eret takes from SPSR_EL1 */
++	__u64 keys[2][10];	/* userspace: APIAKEYLO_EL1..APGAKEYHI_EL1 at EL0 and above */
++	__u64 sctlr[2];		/* userspace: SCTLR_EL1 at EL0 and above */
++	__u64 pac_el;		/* both: the set the vCPU holds, 0 or 1; 2: neither */
++	__u64 handled;		/* kernel: traps it took */
++	/* The return from userspace's TLB flush stub (KVM_ARM_APPLE_FAST_RESUME). */
++	__u64 resume_valid;	/* userspace: 1 while a flush is pending; kernel: 0 once resumed */
++	__u64 resume_pc;
++	__u64 resume_pstate;
++	__u64 resume_sctlr;	/* SCTLR_EL1 the vCPU resumes with, after the key set's */
++	__u64 resume_el;	/* the key set it resumes with, 0 or 1 */
++	/* Reads userspace answers from its own state: imm without Rt, and the value. */
++	__u32 nreads;
++	__u32 pad;
++	__u16 read_imm[16];
++	__u64 read_value[16];
++	/*
++	 * EL0 reads of a register EL0 can't reach on this CPU (an UNDEF that enters the guest's
++	 * lower-EL synchronous vector), at instruction addresses userspace saw before: answered
++	 * from read_imm/read_value and returned to EL0 at the next instruction.
++	 */
++	__u64 el0_ok;		/* userspace: 1 when such reads may be answered */
++	__u32 nsites;
++	__u32 pad2;
++	__u64 site_va[32];	/* the instruction's EL0 address */
++	__u16 site_imm[32];	/* read_imm of the register it reads */
++	__u8 site_rt[32];
++	__u64 disable;		/* userspace: traps to leave to it, 1 << (imm - 0x1340) or bit 4 resume, 5 reads */
++	/*
++	 * An M1-style monitor's own exception registers (userspace's vregs 42-48 but 45: TPIDR,
++	 * VBAR, SPSR, ESR, ELR and FAR "_GL1") while it runs guarded: the vCPU's EL1 registers.
++	 */
++	__u64 guarded;		/* userspace: 1 while the guarded world runs, 0 otherwise */
++	__u64 m1_bank_ok;	/* userspace: 1 to take those accesses here */
++	/*
++	 * EL0 reads at addresses no site names: the instruction at ELR_EL1, read through the
++	 * vCPU's own stage-1 tables, whose encoding without Rt is el0_insn[i], is a read of
++	 * el0_insn_imm[i] (read_imm/read_value).
++	 */
++	__u32 n_el0_insn;
++	__u32 pad3;
++	__u32 el0_insn[4];
++	__u16 el0_insn_imm[4];
++};
++/* The traps' 16-bit immediates (userspace's encoding: read 1, op1 3, crm 4, op2 3, rt 5). */
++#define KVM_ARM_APPLE_FAST_ENTRY	0x1340	/* exception entry from a lower EL */
++#define KVM_ARM_APPLE_FAST_ERET		0x1341
++#define KVM_ARM_APPLE_FAST_IRQ_ENTRY	0x1342
++#define KVM_ARM_APPLE_FAST_IRQ_LOWER	0x1343
++#define KVM_ARM_APPLE_FAST_RESUME	0x1300
++
+ /* Bits for run->s.regs.device_irq_level */
+ #define KVM_ARM_DEV_EL1_VTIMER		(1 << 0)
+ #define KVM_ARM_DEV_EL1_PTIMER		(1 << 1)
+@@ -208,6 +268,19 @@ struct kvm_arm_counter_offset {
  	__u64 reserved;
  };
  
@@ -412,10 +479,190 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..82d6c517b 100644
+index e566bbce7..8a0378c8e 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5314,6 +5314,37 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,179 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+ 		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
+ }
+ 
++/* Install the PAC key set and SCTLR_EL1 an Apple guest's EL @el runs with. */
++static void apple_fast_install(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f, int el)
++{
++	int k;
++
++	if (f->pac_el == el)
++		return;
++	for (k = 0; k < 10; k++)
++		vcpu_write_sys_reg(vcpu, f->keys[el][k], APIAKEYLO_EL1 + k);
++	vcpu_write_sys_reg(vcpu, f->sctlr[el], SCTLR_EL1);
++	f->pac_el = el;
++}
++
++/*
++ * An UNDEF from EL0 that entered the guest's lower-EL synchronous vector: a read at an address
++ * userspace published, answered here and returned to EL0 past it. 0 for userspace.
++ */
++static int apple_fast_el0_read(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f)
++{
++	u64 spsr = vcpu_read_sys_reg(vcpu, SPSR_EL1);
++	u64 elr = vcpu_read_sys_reg(vcpu, ELR_EL1);
++	u32 i, j, n = min_t(u32, READ_ONCE(f->nsites), ARRAY_SIZE(f->site_va));
++	u32 nr = min_t(u32, READ_ONCE(f->nreads), ARRAY_SIZE(f->read_imm));
++
++	if (f->el0_ok != 1 || (spsr & (PSR_MODE32_BIT | PSR_MODE_MASK)) != PSR_MODE_EL0t ||
++	    *vcpu_pc(vcpu) - vcpu_read_sys_reg(vcpu, VBAR_EL1) != 0x400)
++		return 0;
++	u16 imm = 0;
++	u8 rt = 31;
++
++	for (i = 0; i < n; i++) {
++		if (f->site_va[i] == elr) {
++			imm = f->site_imm[i];
++			rt = f->site_rt[i];
++			break;
++		}
++	}
++	/* No site: the instruction itself, through the vCPU's stage-1 tables. */
++	if (!imm && READ_ONCE(f->n_el0_insn)) {
++		struct s1_walk_info wi = { .regime = TR_EL10, .as_el0 = true };
++		struct s1_walk_result wr = {};
++		u32 insn, k, ni = min_t(u32, f->n_el0_insn, ARRAY_SIZE(f->el0_insn));
++
++		if (__kvm_translate_va(vcpu, &wi, &wr, elr) || wr.failed || !wr.ux ||
++		    kvm_read_guest(vcpu->kvm, wr.pa, &insn, sizeof(insn)))
++			return 0;
++		insn = le32_to_cpu(insn);
++		for (k = 0; k < ni; k++) {
++			if ((insn & ~0x1fU) == f->el0_insn[k]) {
++				imm = f->el0_insn_imm[k];
++				rt = insn & 0x1f;
++				break;
++			}
++		}
++	}
++	if (!imm)
++		return 0;
++	for (j = 0; j < nr; j++) {
++		if (f->read_imm[j] != imm)
++			continue;
++		if (rt != 31)
++			vcpu_set_reg(vcpu, rt, f->read_value[j]);
++		*vcpu_cpsr(vcpu) = spsr & f->pstate_mask;
++		*vcpu_pc(vcpu) = elr + 4;
++		apple_fast_install(vcpu, f, 0);
++		f->handled++;
++		return 1;
++	}
++	return 0;
++}
++
++/*
++ * An Apple guest's patched exception entry, exception return or IRQ entry, where userspace
++ * published its PAC key sets: done here, as userspace's fast path does it, without an exit.
++ * Returns 1 if handled, 0 to go to userspace.
++ */
++static int apple_fast_trap(struct kvm_vcpu *vcpu, unsigned long esr)
++{
++	struct kvm_arm_apple_fast *f =
++		(void *)vcpu->run->s.padding + KVM_ARM_APPLE_FAST_OFFSET;
++	struct sys_reg_params p = esr_sys64_to_params(esr);
++	u16 imm;
++	u64 spsr;
++	int el;
++
++	if (READ_ONCE(f->magic) != KVM_ARM_APPLE_FAST_MAGIC || p.CRn != 11 || f->pac_el > 2)
++		return 0;
++	imm = (!p.is_write << 15) | (p.Op1 << 12) | (p.CRm << 8) | (p.Op2 << 5) |
++	      kvm_vcpu_sys_get_rt(vcpu);
++	/* A guarded monitor's own exception register, live in the vCPU's EL1 registers. */
++	if ((imm & 0x8000) && f->m1_bank_ok == 1 && f->guarded == 1 && !(f->disable & BIT(6))) {
++		int reg = -1, rt = imm & 0x1f;
++
++		switch ((imm >> 6) & 0x1ff) {
++		case 42: reg = TPIDR_EL1; break;
++		case 43: reg = VBAR_EL1; break;
++		case 44: reg = SPSR_EL1; break;
++		case 46: reg = ESR_EL1; break;
++		case 47: reg = ELR_EL1; break;
++		case 48: reg = FAR_EL1; break;
++		}
++		if (reg >= 0) {
++			if (imm & 0x20) {
++				if (rt != 31)
++					vcpu_set_reg(vcpu, rt, vcpu_read_sys_reg(vcpu, reg));
++			} else {
++				vcpu_write_sys_reg(vcpu, rt == 31 ? 0 : vcpu_get_reg(vcpu, rt), reg);
++			}
++			kvm_incr_pc(vcpu);
++			f->handled++;
++			return 1;
++		}
++	}
++	/* A register read userspace answers from its own state. */
++	if ((imm & 0x8020) == 0x8020) {
++		if (f->disable & BIT(5))
++			return 0;
++		u32 i, n = min_t(u32, READ_ONCE(f->nreads), ARRAY_SIZE(f->read_imm));
++		int rt = imm & 0x1f;
++
++		for (i = 0; i < n; i++) {
++			if (f->read_imm[i] != (imm & ~0x1f))
++				continue;
++			if (rt != 31)
++				vcpu_set_reg(vcpu, rt, f->read_value[i]);
++			kvm_incr_pc(vcpu);
++			f->handled++;
++			return 1;
++		}
++		return 0;
++	}
++	if (imm >= 0x1340 && imm <= 0x1343 && (f->disable & BIT(imm - 0x1340)))
++		return 0;
++	if (imm == KVM_ARM_APPLE_FAST_RESUME && (f->disable & BIT(4)))
++		return 0;
++	switch (imm) {
++	case KVM_ARM_APPLE_FAST_ENTRY:
++		/* An EL0 SPRR access (an UNDEF): a known read here, the rest in userspace. */
++		if (ESR_ELx_EC(vcpu_read_sys_reg(vcpu, ESR_EL1)) == ESR_ELx_EC_UNKNOWN)
++			return apple_fast_el0_read(vcpu, f);
++		fallthrough;
++	case KVM_ARM_APPLE_FAST_IRQ_LOWER:
++		apple_fast_install(vcpu, f, 1);
++		fallthrough;
++	case KVM_ARM_APPLE_FAST_IRQ_ENTRY:
++		kvm_incr_pc(vcpu);
++		break;
++	case KVM_ARM_APPLE_FAST_RESUME:
++		if (f->resume_valid != 1 || f->resume_el > 1)
++			return 0;
++		f->pac_el = 2;
++		apple_fast_install(vcpu, f, f->resume_el);
++		vcpu_write_sys_reg(vcpu, f->resume_sctlr, SCTLR_EL1);
++		*vcpu_cpsr(vcpu) = f->resume_pstate;
++		*vcpu_pc(vcpu) = f->resume_pc;
++		f->resume_valid = 0;
++		break;
++	case KVM_ARM_APPLE_FAST_ERET:
++		spsr = vcpu_read_sys_reg(vcpu, SPSR_EL1);
++		el = (spsr >> 2) & 3;
++		if (el > 1)
++			return 0;
++		*vcpu_cpsr(vcpu) = spsr & f->pstate_mask;
++		*vcpu_pc(vcpu) = vcpu_read_sys_reg(vcpu, ELR_EL1);
++		apple_fast_install(vcpu, f, el);
++		break;
++	default:
++		return 0;
++	}
++	f->handled++;
++	return 1;
++}
++
+ /**
+  * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
+  *			 trap on a guest execution
+@@ -5314,6 +5487,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -427,6 +674,8 @@ index e566bbce7..82d6c517b 100644
 +	if (test_bit(KVM_ARCH_FLAG_IMPDEF_SYSREG_TO_USER, &vcpu->kvm->arch.flags)) {
 +		params = esr_sys64_to_params(esr);
 +		if (params.Op0 == 3 && (params.CRn & 0b1011) == 0b1011) {
++			if (apple_fast_trap(vcpu, esr))
++				return 1;
 +			vcpu->run->exit_reason = KVM_EXIT_ARM_SYSREG;
 +			vcpu->run->arm_sysreg.esr_iss = esr & ESR_ELx_ISS_MASK;
 +			return 0;
@@ -453,7 +702,7 @@ index e566bbce7..82d6c517b 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +5824,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +5999,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -463,7 +712,7 @@ index e566bbce7..82d6c517b 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +5834,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6009,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
