@@ -58,10 +58,10 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..9d3bab0f8 100644
+index 1c13bfa2d..9ae0bc03b 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
-@@ -158,6 +158,66 @@ struct kvm_sync_regs {
+@@ -158,6 +158,81 @@ struct kvm_sync_regs {
  	__u64 device_irq_level;
  };
  
@@ -117,6 +117,21 @@ index 1c13bfa2d..9d3bab0f8 100644
 +	__u32 pad3;
 +	__u32 el0_insn[4];
 +	__u16 el0_insn_imm[4];
++	/*
++	 * World switches (genter 0x1420-0x143f, gexit 0x1400-0x141f) between the unguarded world
++	 * and the guarded one, as userspace's fast paths do them, where it publishes both worlds'
++	 * translation tables. bank[] is the world that doesn't run: SP_EL1, TPIDR_EL1, VBAR_EL1,
++	 * SPSR_EL1, ELR_EL1, ESR_EL1, FAR_EL1, which a switch exchanges with the vCPU's.
++	 */
++	__u64 ws_ok;		/* userspace: 1 to switch here */
++	__u64 bank[7];		/* both */
++	__u64 ttbr[2][2];	/* userspace: TTBR0/1_EL1 of the unguarded [0] and guarded [1] world */
++	__u64 enter_pc;		/* userspace: where genter enters the guarded world */
++	__u64 genter_pstate;	/* userspace: its PSTATE, but the caller's PAN, which it takes */
++	__u64 genter_esr;	/* userspace: its ESR_EL1, but the immediate's low five bits */
++	__u64 aspsr;		/* both: ASPSR_GL1, whose bit 0 leaves gexit to userspace */
++	__u64 status_other;	/* userspace: GXF_STATUS_EL1 but bit 0 (guarded) */
++	__u64 switches;		/* kernel: world switches it made */
 +};
 +/* The traps' 16-bit immediates (userspace's encoding: read 1, op1 3, crm 4, op2 3, rt 5). */
 +#define KVM_ARM_APPLE_FAST_ENTRY	0x1340	/* exception entry from a lower EL */
@@ -128,7 +143,7 @@ index 1c13bfa2d..9d3bab0f8 100644
  /* Bits for run->s.regs.device_irq_level */
  #define KVM_ARM_DEV_EL1_VTIMER		(1 << 0)
  #define KVM_ARM_DEV_EL1_PTIMER		(1 << 1)
-@@ -208,6 +268,19 @@ struct kvm_arm_counter_offset {
+@@ -208,6 +283,19 @@ struct kvm_arm_counter_offset {
  	__u64 reserved;
  };
  
@@ -479,10 +494,10 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..8a0378c8e 100644
+index e566bbce7..4c8b0a819 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,179 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,298 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -497,6 +512,123 @@ index e566bbce7..8a0378c8e 100644
 +		vcpu_write_sys_reg(vcpu, f->keys[el][k], APIAKEYLO_EL1 + k);
 +	vcpu_write_sys_reg(vcpu, f->sctlr[el], SCTLR_EL1);
 +	f->pac_el = el;
++}
++
++/* SP_EL1 lives in the CPU while the vCPU is loaded (VHE saves it at vcpu_put). */
++static u64 apple_sp_el1(struct kvm_vcpu *vcpu, bool write, u64 val)
++{
++	u64 old;
++
++	preempt_disable();
++	if (vcpu_get_flag(vcpu, SYSREGS_ON_CPU)) {
++		old = read_sysreg(sp_el1);
++		if (write)
++			write_sysreg(val, sp_el1);
++	} else {
++		old = __vcpu_sys_reg(vcpu, SP_EL1);
++		if (write)
++			__vcpu_assign_sys_reg(vcpu, SP_EL1, val);
++	}
++	preempt_enable();
++	return old;
++}
++
++static const int apple_bank_regs[7] = {
++	-1, TPIDR_EL1, VBAR_EL1, SPSR_EL1, ELR_EL1, ESR_EL1, FAR_EL1,
++};
++
++/* Exchange the vCPU's banked EL1 registers with the world that doesn't run. */
++static void apple_swap_bank(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f)
++{
++	int i;
++
++	f->bank[0] = apple_sp_el1(vcpu, true, f->bank[0]);
++	for (i = 1; i < 7; i++) {
++		u64 cur = vcpu_read_sys_reg(vcpu, apple_bank_regs[i]);
++
++		vcpu_write_sys_reg(vcpu, f->bank[i], apple_bank_regs[i]);
++		f->bank[i] = cur;
++	}
++}
++
++/* The published value of the read `imm` (without Rt), where userspace answers it here. */
++static void apple_set_read(struct kvm_arm_apple_fast *f, u16 imm, u64 val)
++{
++	u32 i, n = min_t(u32, f->nreads, ARRAY_SIZE(f->read_imm));
++
++	for (i = 0; i < n; i++)
++		if (f->read_imm[i] == imm)
++			f->read_value[i] = val;
++}
++
++/*
++ * Enter world `guarded` at `pc` with `pstate`: its tables, the key set and SCTLR of its EL, and a
++ * flush of this CPU's TLB for the VM (the worlds' tables differ under one VMID), with every other
++ * CPU made to flush before this VM runs there again.
++ */
++static void apple_enter_world(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f, int guarded,
++			      u64 pstate, u64 pc)
++{
++	struct kvm_s2_mmu *mmu = vcpu->arch.hw_mmu;
++	int cpu;
++
++	vcpu_write_sys_reg(vcpu, f->ttbr[guarded][0], TTBR0_EL1);
++	vcpu_write_sys_reg(vcpu, f->ttbr[guarded][1], TTBR1_EL1);
++	apple_fast_install(vcpu, f, (pstate >> 2) & 3);
++	*vcpu_cpsr(vcpu) = pstate;
++	*vcpu_pc(vcpu) = pc;
++	f->guarded = guarded;
++	apple_set_read(f, 0x8000 | (2 << 6) | 0x20, f->status_other | guarded);	/* GXF_STATUS */
++	apple_set_read(f, 0x8000 | (45 << 6) | 0x20, f->aspsr);		/* ASPSR_GL1 */
++	preempt_disable();
++	kvm_call_hyp(__kvm_flush_cpu_context, mmu);
++	for_each_possible_cpu(cpu)
++		if (cpu != smp_processor_id())
++			*per_cpu_ptr(mmu->last_vcpu_ran, cpu) = -1;
++	preempt_enable();
++	f->switches++;
++}
++
++/* genter (from EL1 of the unguarded world) and gexit, where userspace published both worlds. */
++static int apple_fast_world(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f, u16 imm)
++{
++	u64 cpsr = *vcpu_cpsr(vcpu);
++
++	if (f->ws_ok != 1 || f->resume_valid)
++		return 0;
++	if ((imm & 0xffe0) == 0x1420) {
++		u64 ret = *vcpu_pc(vcpu) + 4;
++
++		if (f->guarded != 0 || ((cpsr >> 2) & 3) != 1 || (cpsr & PSR_MODE32_BIT))
++			return 0;
++		apple_swap_bank(vcpu, f);
++		/* Now the guarded world's registers: the caller's return state and syndrome. */
++		vcpu_write_sys_reg(vcpu, cpsr, SPSR_EL1);
++		vcpu_write_sys_reg(vcpu, ret, ELR_EL1);
++		vcpu_write_sys_reg(vcpu, f->genter_esr | (imm & 0x1f), ESR_EL1);
++		f->aspsr &= ~1ULL;
++		apple_enter_world(vcpu, f, 1, f->genter_pstate | (cpsr & PSR_PAN_BIT), f->enter_pc);
++		f->handled++;
++		return 1;
++	}
++	if ((imm & 0xffe0) == 0x1400) {
++		u64 spsr, elr;
++
++		if (f->guarded != 1 || (f->aspsr & 1))
++			return 0;
++		apple_swap_bank(vcpu, f);
++		/* bank[] now holds the guarded world's: return to its ELR with its SPSR. */
++		spsr = f->bank[3] & f->pstate_mask;
++		elr = f->bank[4];
++		if (((spsr >> 2) & 3) > 1) {
++			apple_swap_bank(vcpu, f);
++			return 0;
++		}
++		apple_enter_world(vcpu, f, 0, spsr, elr);
++		f->handled++;
++		return 1;
++	}
++	return 0;
 +}
 +
 +/*
@@ -619,6 +751,8 @@ index e566bbce7..8a0378c8e 100644
 +	}
 +	if (imm >= 0x1340 && imm <= 0x1343 && (f->disable & BIT(imm - 0x1340)))
 +		return 0;
++	if ((imm & 0xffc0) == 0x1400 && !(f->disable & BIT(7)))
++		return apple_fast_world(vcpu, f, imm);
 +	if (imm == KVM_ARM_APPLE_FAST_RESUME && (f->disable & BIT(4)))
 +		return 0;
 +	switch (imm) {
@@ -662,7 +796,7 @@ index e566bbce7..8a0378c8e 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5487,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5606,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -702,7 +836,7 @@ index e566bbce7..8a0378c8e 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +5999,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6118,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -712,7 +846,7 @@ index e566bbce7..8a0378c8e 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6009,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6128,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
