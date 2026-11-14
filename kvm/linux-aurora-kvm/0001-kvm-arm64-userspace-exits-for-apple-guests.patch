@@ -1,5 +1,5 @@
 diff --git i/arch/arm64/include/asm/kvm_host.h w/arch/arm64/include/asm/kvm_host.h
-index 7f94635e6..7c521fae5 100644
+index 7f94635e6..8d567828a 100644
 --- i/arch/arm64/include/asm/kvm_host.h
 +++ w/arch/arm64/include/asm/kvm_host.h
 @@ -309,6 +309,13 @@ enum fgt_group_id {
@@ -33,7 +33,15 @@ index 7f94635e6..7c521fae5 100644
  	unsigned long flags;
  
  	/* VM-wide vCPU feature set */
-@@ -1504,6 +1521,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
+@@ -1303,6 +1320,7 @@ int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
+ int kvm_handle_cp15_32(struct kvm_vcpu *vcpu);
+ int kvm_handle_cp15_64(struct kvm_vcpu *vcpu);
+ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu);
++void kvm_arm_apple_snapshot(struct kvm_vcpu *vcpu);
+ int kvm_handle_cp10_id(struct kvm_vcpu *vcpu);
+ 
+ void kvm_sys_regs_create_debugfs(struct kvm *kvm);
+@@ -1504,6 +1522,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
  
  #define kvm_arm_vcpu_sve_finalized(vcpu) vcpu_get_flag(vcpu, VCPU_SVE_FINALIZED)
  
@@ -58,10 +66,10 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..1d86a46f6 100644
+index 1c13bfa2d..01ed12d53 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
-@@ -158,6 +158,82 @@ struct kvm_sync_regs {
+@@ -158,6 +158,108 @@ struct kvm_sync_regs {
  	__u64 device_irq_level;
  };
  
@@ -101,7 +109,7 @@ index 1c13bfa2d..1d86a46f6 100644
 +	__u64 site_va[32];	/* the instruction's EL0 address */
 +	__u16 site_imm[32];	/* read_imm of the register it reads */
 +	__u8 site_rt[32];
-+	__u64 disable;		/* userspace: traps to leave to it, 1 << (imm - 0x1340) or bit 4 resume, 5 reads */
++	__u64 disable;		/* userspace: traps to leave to it, 1 << (imm - 0x1340); bit 4 resume, 5 reads, 6 M1 bank, 7 world switches, 8 APCTL, 9 ASPSR writes, 10 key writes, 11 SPRR writes */
 +	/*
 +	 * An M1-style monitor's own exception registers (userspace's vregs 42-48 but 45: TPIDR,
 +	 * VBAR, SPSR, ESR, ELR and FAR "_GL1") while it runs guarded: the vCPU's EL1 registers.
@@ -133,6 +141,32 @@ index 1c13bfa2d..1d86a46f6 100644
 +	__u64 status_other;	/* userspace: GXF_STATUS_EL1 but bit 0 (guarded) */
 +	__u64 switches;		/* kernel: world switches it made */
 +	__u64 stub_pc;		/* userspace: its TLB flush stub, for ws_ok bit 8 (flush there, as it does) */
++	/*
++	 * APCTL_EL1 (S3_4_C15_C0_4) at EL1, whose KernKeyEn (bit 2) adds the kernel key to the
++	 * keys above EL0: a change of other bits (AppleMode) goes to userspace. And ASPSR_GL1
++	 * writes while guarded, into aspsr, where ws_ok published it.
++	 */
++	__u64 apctl_ok;		/* userspace: 1 to take APCTL accesses here */
++	__u64 apctl;		/* both */
++	__u64 kernkey[2];	/* userspace: the kernel key, lo and hi */
++	/*
++	 * The vCPU's registers at an exit to userspace, which it reads here instead of one
++	 * KVM_GET_ONE_REG each. snap_reg[]: PC, PSTATE, SP_EL0, SP_EL1, TPIDR_EL1, VBAR_EL1,
++	 * SPSR_EL1, ELR_EL1, ESR_EL1, FAR_EL1, SCTLR_EL1, TCR_EL1, TTBR0_EL1, TTBR1_EL1.
++	 */
++	__u64 snap_ok;		/* userspace: 1 to have them */
++	__u64 snap_valid;	/* kernel: 1 at the exit; userspace clears it before it runs the vCPU */
++	__u64 snap_x[31];
++	__u64 snap_reg[14];
++	__u64 snap_insn;	/* kernel: at a data abort exit (KVM_EXIT_ARM_FAULT), the instruction at PC | 1 << 32 */
++	/*
++	 * Writes of the PAC keys (userspace's vregs 22-31, APIAKEYLO_EL1..APGAKEYHI_EL1) into
++	 * keys[0] (masked with the machine key in APCTL's AppleMode) and keys[1] (with the kernel
++	 * key under KernKeyEn); and SPRR permission writes (vregs 5, 6, 8) of the value a read
++	 * would give (read_imm/read_value), which change nothing.
++	 */
++	__u64 keys_ok;		/* userspace: 1 to take the key writes here */
++	__u64 mkey[2];		/* userspace: the machine key, lo and hi */
 +};
 +/* The traps' 16-bit immediates (userspace's encoding: read 1, op1 3, crm 4, op2 3, rt 5). */
 +#define KVM_ARM_APPLE_FAST_ENTRY	0x1340	/* exception entry from a lower EL */
@@ -144,7 +178,7 @@ index 1c13bfa2d..1d86a46f6 100644
  /* Bits for run->s.regs.device_irq_level */
  #define KVM_ARM_DEV_EL1_VTIMER		(1 << 0)
  #define KVM_ARM_DEV_EL1_PTIMER		(1 << 1)
-@@ -208,6 +284,19 @@ struct kvm_arm_counter_offset {
+@@ -208,6 +310,19 @@ struct kvm_arm_counter_offset {
  	__u64 reserved;
  };
  
@@ -214,7 +248,7 @@ index 4155fe89b..ddb206448 100644
  
  	/*
 diff --git i/arch/arm64/kvm/arm.c w/arch/arm64/kvm/arm.c
-index ad04ef4bb..db3e4dfae 100644
+index ad04ef4bb..1a2f9c9f0 100644
 --- i/arch/arm64/kvm/arm.c
 +++ w/arch/arm64/kvm/arm.c
 @@ -202,6 +202,36 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
@@ -327,7 +361,16 @@ index ad04ef4bb..db3e4dfae 100644
  		kvm_irq_update_run(vcpu);
  
  	kvm_sigset_deactivate(vcpu);
-@@ -2060,6 +2097,13 @@ int kvm_arch_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
+@@ -1451,6 +1488,8 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
+ 		kvm_call_hyp(__kvm_adjust_pc, vcpu);
+ 
+ 	vcpu_put(vcpu);
++	if (!ret)
++		kvm_arm_apple_snapshot(vcpu);
+ 	return ret;
+ }
+ 
+@@ -2060,6 +2099,13 @@ int kvm_arch_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
  			return -EFAULT;
  		return kvm_vm_ioctl_mte_copy_tags(kvm, &copy_tags);
  	}
@@ -495,10 +538,10 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..492bc2b10 100644
+index e566bbce7..0c921f5cb 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,320 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,433 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -717,6 +760,74 @@ index e566bbce7..492bc2b10 100644
 + * published its PAC key sets: done here, as userspace's fast path does it, without an exit.
 + * Returns 1 if handled, 0 to go to userspace.
 + */
++/* The vCPU's registers for userspace at an exit to it (struct kvm_arm_apple_fast's snap_*). */
++void kvm_arm_apple_snapshot(struct kvm_vcpu *vcpu)
++{
++	static const int sys[] = { SP_EL1, TPIDR_EL1, VBAR_EL1, SPSR_EL1, ELR_EL1, ESR_EL1,
++				   FAR_EL1, SCTLR_EL1, TCR_EL1, TTBR0_EL1, TTBR1_EL1 };
++	struct kvm_arm_apple_fast *f =
++		(void *)vcpu->run->s.padding + KVM_ARM_APPLE_FAST_OFFSET;
++	int i;
++
++	if (READ_ONCE(f->magic) != KVM_ARM_APPLE_FAST_MAGIC || f->snap_ok != 1)
++		return;
++	for (i = 0; i < 31; i++)
++		f->snap_x[i] = vcpu_get_reg(vcpu, i);
++	f->snap_reg[0] = *vcpu_pc(vcpu);
++	f->snap_reg[1] = *vcpu_cpsr(vcpu);
++	f->snap_reg[2] = vcpu_gp_regs(vcpu)->sp;
++	for (i = 0; i < ARRAY_SIZE(sys); i++)
++		f->snap_reg[3 + i] = vcpu_read_sys_reg(vcpu, sys[i]);
++	f->snap_insn = 0;
++	if (vcpu->run->exit_reason == KVM_EXIT_ARM_FAULT &&
++	    ESR_ELx_EC(vcpu->run->arm_fault.esr) == ESR_ELx_EC_DABT_LOW) {
++		struct s1_walk_info wi = {
++			.regime = TR_EL10,
++			.as_el0 = ((f->snap_reg[1] >> 2) & 3) == 0,
++		};
++		struct s1_walk_result wr = {};
++		u32 insn;
++
++		if (!__kvm_translate_va(vcpu, &wi, &wr, f->snap_reg[0]) && !wr.failed &&
++		    !kvm_read_guest(vcpu->kvm, wr.pa, &insn, sizeof(insn)))
++			f->snap_insn = le32_to_cpu(insn) | BIT_ULL(32);
++	}
++	f->snap_valid = 1;
++}
++
++/* APCTL_EL1 at EL1: MKEYVld (bit 1) is read-only, KernKeyEn (bit 2) changes the keys above EL0. */
++static int apple_fast_apctl(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f,
++			    struct sys_reg_params *p)
++{
++	int rt = kvm_vcpu_sys_get_rt(vcpu), k;
++	u64 val;
++
++	if (f->apctl_ok != 1 || (f->disable & BIT(8)) || f->pac_el > 1 ||
++	    ((*vcpu_cpsr(vcpu) >> 2) & 3) != 1)
++		return 0;
++	if (!p->is_write) {
++		if (rt != 31)
++			vcpu_set_reg(vcpu, rt, f->apctl);
++	} else {
++		val = rt == 31 ? 0 : vcpu_get_reg(vcpu, rt);
++		val = (val & ~BIT(1)) | (f->apctl & BIT(1));
++		if ((val ^ f->apctl) & ~BIT(2))
++			return 0;
++		if (val != f->apctl) {
++			for (k = 0; k < 10; k++)
++				f->keys[1][k] ^= f->kernkey[k & 1];
++			f->apctl = val;
++			if (f->pac_el == 1) {
++				f->pac_el = 2;
++				apple_fast_install(vcpu, f, 1);
++			}
++		}
++	}
++	kvm_incr_pc(vcpu);
++	f->handled++;
++	return 1;
++}
++
 +static int apple_fast_trap(struct kvm_vcpu *vcpu, unsigned long esr)
 +{
 +	struct kvm_arm_apple_fast *f =
@@ -726,7 +837,11 @@ index e566bbce7..492bc2b10 100644
 +	u64 spsr;
 +	int el;
 +
-+	if (READ_ONCE(f->magic) != KVM_ARM_APPLE_FAST_MAGIC || p.CRn != 11 || f->pac_el > 2)
++	if (READ_ONCE(f->magic) != KVM_ARM_APPLE_FAST_MAGIC || f->pac_el > 2)
++		return 0;
++	if (p.CRn == 15 && p.Op1 == 4 && p.CRm == 0 && p.Op2 == 4)
++		return apple_fast_apctl(vcpu, f, &p);
++	if (p.CRn != 11)
 +		return 0;
 +	imm = (!p.is_write << 15) | (p.Op1 << 12) | (p.CRm << 8) | (p.Op2 << 5) |
 +	      kvm_vcpu_sys_get_rt(vcpu);
@@ -752,6 +867,47 @@ index e566bbce7..492bc2b10 100644
 +			kvm_incr_pc(vcpu);
 +			f->handled++;
 +			return 1;
++		}
++	}
++	/* A guarded monitor's ASPSR_GL1 write (vreg 45), where a world switch takes it from. */
++	if ((imm & 0xffe0) == 0x8b40 && f->ws_ok && f->guarded == 1 && !(f->disable & BIT(9))) {
++		int rt = imm & 0x1f;
++
++		f->aspsr = rt == 31 ? 0 : vcpu_get_reg(vcpu, rt);
++		apple_set_read(f, 0x8b60, f->aspsr);
++		kvm_incr_pc(vcpu);
++		f->handled++;
++		return 1;
++	}
++	/* A PAC key write. */
++	if ((imm & 0x8020) == 0x8000 && ((imm >> 6) & 0x1ff) >= 22 && ((imm >> 6) & 0x1ff) <= 31 &&
++	    f->keys_ok == 1 && f->pac_el < 2 && !(f->disable & BIT(10))) {
++		int k = ((imm >> 6) & 0x1ff) - 22, rt = imm & 0x1f;
++		u64 v = rt == 31 ? 0 : vcpu_get_reg(vcpu, rt);
++
++		if (f->apctl & BIT(0))
++			v ^= f->mkey[k & 1];
++		f->keys[0][k] = v;
++		f->keys[1][k] = (f->apctl & BIT(2)) ? v ^ f->kernkey[k & 1] : v;
++		vcpu_write_sys_reg(vcpu, f->keys[f->pac_el][k], APIAKEYLO_EL1 + k);
++		kvm_incr_pc(vcpu);
++		f->handled++;
++		return 1;
++	}
++	/* An SPRR permission write of the value it already has. */
++	if ((imm & 0x8020) == 0x8000 && !(f->disable & BIT(11))) {
++		u32 vreg = (imm >> 6) & 0x1ff, i, n = min_t(u32, READ_ONCE(f->nreads), ARRAY_SIZE(f->read_imm));
++		int rt = imm & 0x1f;
++		u64 v = rt == 31 ? 0 : vcpu_get_reg(vcpu, rt);
++
++		if (vreg == 5 || vreg == 6 || vreg == 8) {
++			for (i = 0; i < n; i++) {
++				if (f->read_imm[i] == ((imm & ~0x1f) | 0x20) && f->read_value[i] == v) {
++					kvm_incr_pc(vcpu);
++					f->handled++;
++					return 1;
++				}
++			}
 +		}
 +	}
 +	/* A register read userspace answers from its own state. */
@@ -819,7 +975,7 @@ index e566bbce7..492bc2b10 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5628,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5741,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -859,7 +1015,7 @@ index e566bbce7..492bc2b10 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +6140,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6253,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -869,7 +1025,7 @@ index e566bbce7..492bc2b10 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6150,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6263,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
