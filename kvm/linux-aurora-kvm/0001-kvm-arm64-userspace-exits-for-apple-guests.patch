@@ -58,7 +58,7 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..9ae0bc03b 100644
+index 1c13bfa2d..43bc5ca4e 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
 @@ -158,6 +158,81 @@ struct kvm_sync_regs {
@@ -123,7 +123,7 @@ index 1c13bfa2d..9ae0bc03b 100644
 +	 * translation tables. bank[] is the world that doesn't run: SP_EL1, TPIDR_EL1, VBAR_EL1,
 +	 * SPSR_EL1, ELR_EL1, ESR_EL1, FAR_EL1, which a switch exchanges with the vCPU's.
 +	 */
-+	__u64 ws_ok;		/* userspace: 1 to switch here */
++	__u64 ws_ok;		/* userspace: 1 genter, 2 gexit here; 4 flush every CPU's TLB */
 +	__u64 bank[7];		/* both */
 +	__u64 ttbr[2][2];	/* userspace: TTBR0/1_EL1 of the unguarded [0] and guarded [1] world */
 +	__u64 enter_pc;		/* userspace: where genter enters the guarded world */
@@ -494,10 +494,10 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..4c8b0a819 100644
+index e566bbce7..3d0a2fac9 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,298 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,303 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -580,12 +580,17 @@ index e566bbce7..4c8b0a819 100644
 +	f->guarded = guarded;
 +	apple_set_read(f, 0x8000 | (2 << 6) | 0x20, f->status_other | guarded);	/* GXF_STATUS */
 +	apple_set_read(f, 0x8000 | (45 << 6) | 0x20, f->aspsr);		/* ASPSR_GL1 */
-+	preempt_disable();
-+	kvm_call_hyp(__kvm_flush_cpu_context, mmu);
-+	for_each_possible_cpu(cpu)
-+		if (cpu != smp_processor_id())
-+			*per_cpu_ptr(mmu->last_vcpu_ran, cpu) = -1;
-+	preempt_enable();
++	if (f->ws_ok & 4) {
++		/* Every CPU's TLB for the VM. */
++		kvm_call_hyp(__kvm_tlb_flush_vmid, mmu);
++	} else {
++		preempt_disable();
++		kvm_call_hyp(__kvm_flush_cpu_context, mmu);
++		for_each_possible_cpu(cpu)
++			if (cpu != smp_processor_id())
++				*per_cpu_ptr(mmu->last_vcpu_ran, cpu) = -1;
++		preempt_enable();
++	}
 +	f->switches++;
 +}
 +
@@ -594,9 +599,9 @@ index e566bbce7..4c8b0a819 100644
 +{
 +	u64 cpsr = *vcpu_cpsr(vcpu);
 +
-+	if (f->ws_ok != 1 || f->resume_valid)
++	if (!(f->ws_ok & 3) || f->resume_valid)
 +		return 0;
-+	if ((imm & 0xffe0) == 0x1420) {
++	if ((imm & 0xffe0) == 0x1420 && (f->ws_ok & 1)) {
 +		u64 ret = *vcpu_pc(vcpu) + 4;
 +
 +		if (f->guarded != 0 || ((cpsr >> 2) & 3) != 1 || (cpsr & PSR_MODE32_BIT))
@@ -611,7 +616,7 @@ index e566bbce7..4c8b0a819 100644
 +		f->handled++;
 +		return 1;
 +	}
-+	if ((imm & 0xffe0) == 0x1400) {
++	if ((imm & 0xffe0) == 0x1400 && (f->ws_ok & 2)) {
 +		u64 spsr, elr;
 +
 +		if (f->guarded != 1 || (f->aspsr & 1))
@@ -796,7 +801,7 @@ index e566bbce7..4c8b0a819 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5606,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5611,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -836,7 +841,7 @@ index e566bbce7..4c8b0a819 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +6118,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6123,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -846,7 +851,7 @@ index e566bbce7..4c8b0a819 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6128,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6133,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
