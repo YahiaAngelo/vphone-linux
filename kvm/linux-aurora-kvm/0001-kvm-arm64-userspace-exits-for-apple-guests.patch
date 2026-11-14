@@ -58,10 +58,10 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..43bc5ca4e 100644
+index 1c13bfa2d..1d86a46f6 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
-@@ -158,6 +158,81 @@ struct kvm_sync_regs {
+@@ -158,6 +158,82 @@ struct kvm_sync_regs {
  	__u64 device_irq_level;
  };
  
@@ -123,7 +123,7 @@ index 1c13bfa2d..43bc5ca4e 100644
 +	 * translation tables. bank[] is the world that doesn't run: SP_EL1, TPIDR_EL1, VBAR_EL1,
 +	 * SPSR_EL1, ELR_EL1, ESR_EL1, FAR_EL1, which a switch exchanges with the vCPU's.
 +	 */
-+	__u64 ws_ok;		/* userspace: 1 genter, 2 gexit here; 4 flush every CPU's TLB */
++	__u64 ws_ok;		/* userspace: 1 genter, 2 gexit here; 4 flush every CPU's TLB; 8 the stub flushes */
 +	__u64 bank[7];		/* both */
 +	__u64 ttbr[2][2];	/* userspace: TTBR0/1_EL1 of the unguarded [0] and guarded [1] world */
 +	__u64 enter_pc;		/* userspace: where genter enters the guarded world */
@@ -132,6 +132,7 @@ index 1c13bfa2d..43bc5ca4e 100644
 +	__u64 aspsr;		/* both: ASPSR_GL1, whose bit 0 leaves gexit to userspace */
 +	__u64 status_other;	/* userspace: GXF_STATUS_EL1 but bit 0 (guarded) */
 +	__u64 switches;		/* kernel: world switches it made */
++	__u64 stub_pc;		/* userspace: its TLB flush stub, for ws_ok bit 8 (flush there, as it does) */
 +};
 +/* The traps' 16-bit immediates (userspace's encoding: read 1, op1 3, crm 4, op2 3, rt 5). */
 +#define KVM_ARM_APPLE_FAST_ENTRY	0x1340	/* exception entry from a lower EL */
@@ -143,7 +144,7 @@ index 1c13bfa2d..43bc5ca4e 100644
  /* Bits for run->s.regs.device_irq_level */
  #define KVM_ARM_DEV_EL1_VTIMER		(1 << 0)
  #define KVM_ARM_DEV_EL1_PTIMER		(1 << 1)
-@@ -208,6 +283,19 @@ struct kvm_arm_counter_offset {
+@@ -208,6 +284,19 @@ struct kvm_arm_counter_offset {
  	__u64 reserved;
  };
  
@@ -494,10 +495,10 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..3d0a2fac9 100644
+index e566bbce7..492bc2b10 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,303 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,320 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -572,14 +573,32 @@ index e566bbce7..3d0a2fac9 100644
 +	struct kvm_s2_mmu *mmu = vcpu->arch.hw_mmu;
 +	int cpu;
 +
++	int el = (pstate >> 2) & 3;
++
 +	vcpu_write_sys_reg(vcpu, f->ttbr[guarded][0], TTBR0_EL1);
 +	vcpu_write_sys_reg(vcpu, f->ttbr[guarded][1], TTBR1_EL1);
-+	apple_fast_install(vcpu, f, (pstate >> 2) & 3);
-+	*vcpu_cpsr(vcpu) = pstate;
-+	*vcpu_pc(vcpu) = pc;
++	apple_fast_install(vcpu, f, el);
 +	f->guarded = guarded;
 +	apple_set_read(f, 0x8000 | (2 << 6) | 0x20, f->status_other | guarded);	/* GXF_STATUS */
 +	apple_set_read(f, 0x8000 | (45 << 6) | 0x20, f->aspsr);		/* ASPSR_GL1 */
++	f->switches++;
++	if ((f->ws_ok & 8) && f->stub_pc) {
++		/*
++		 * As userspace flushes: the vCPU runs its stub (tlbi vmalle1; dsb; isb) at EL1 with the
++		 * MMU off, whose trap then resumes at pc with pstate (KVM_ARM_APPLE_FAST_RESUME).
++		 */
++		f->resume_pc = pc;
++		f->resume_pstate = pstate;
++		f->resume_el = el;
++		f->resume_sctlr = f->sctlr[el];
++		f->resume_valid = 1;
++		vcpu_write_sys_reg(vcpu, f->sctlr[el] & ~SCTLR_ELx_M, SCTLR_EL1);
++		*vcpu_cpsr(vcpu) = PSR_MODE_EL1h | PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT;
++		*vcpu_pc(vcpu) = f->stub_pc;
++		return;
++	}
++	*vcpu_cpsr(vcpu) = pstate;
++	*vcpu_pc(vcpu) = pc;
 +	if (f->ws_ok & 4) {
 +		/* Every CPU's TLB for the VM. */
 +		kvm_call_hyp(__kvm_tlb_flush_vmid, mmu);
@@ -591,7 +610,6 @@ index e566bbce7..3d0a2fac9 100644
 +				*per_cpu_ptr(mmu->last_vcpu_ran, cpu) = -1;
 +		preempt_enable();
 +	}
-+	f->switches++;
 +}
 +
 +/* genter (from EL1 of the unguarded world) and gexit, where userspace published both worlds. */
@@ -801,7 +819,7 @@ index e566bbce7..3d0a2fac9 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5611,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5628,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -841,7 +859,7 @@ index e566bbce7..3d0a2fac9 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +6123,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6140,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -851,7 +869,7 @@ index e566bbce7..3d0a2fac9 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6133,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6150,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
