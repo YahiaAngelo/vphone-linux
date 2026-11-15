@@ -1,5 +1,5 @@
 diff --git i/arch/arm64/include/asm/kvm_host.h w/arch/arm64/include/asm/kvm_host.h
-index 7f94635e6..8d567828a 100644
+index 7f94635e6..4b234c77d 100644
 --- i/arch/arm64/include/asm/kvm_host.h
 +++ w/arch/arm64/include/asm/kvm_host.h
 @@ -309,6 +309,13 @@ enum fgt_group_id {
@@ -33,15 +33,16 @@ index 7f94635e6..8d567828a 100644
  	unsigned long flags;
  
  	/* VM-wide vCPU feature set */
-@@ -1303,6 +1320,7 @@ int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
+@@ -1303,6 +1320,8 @@ int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
  int kvm_handle_cp15_32(struct kvm_vcpu *vcpu);
  int kvm_handle_cp15_64(struct kvm_vcpu *vcpu);
  int kvm_handle_sys_reg(struct kvm_vcpu *vcpu);
 +void kvm_arm_apple_snapshot(struct kvm_vcpu *vcpu);
++int kvm_arm_apple_pt_store(struct kvm_vcpu *vcpu, phys_addr_t ipa, u64 far, u64 esr);
  int kvm_handle_cp10_id(struct kvm_vcpu *vcpu);
  
  void kvm_sys_regs_create_debugfs(struct kvm *kvm);
-@@ -1504,6 +1522,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
+@@ -1504,6 +1523,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
  
  #define kvm_arm_vcpu_sve_finalized(vcpu) vcpu_get_flag(vcpu, VCPU_SVE_FINALIZED)
  
@@ -66,10 +67,10 @@ index 6eae7e7e2..00fd68c67 100644
  			    u64 size, bool may_block);
  void kvm_stage2_flush_range(struct kvm_s2_mmu *mmu, phys_addr_t addr, phys_addr_t end);
 diff --git i/arch/arm64/include/uapi/asm/kvm.h w/arch/arm64/include/uapi/asm/kvm.h
-index 1c13bfa2d..01ed12d53 100644
+index 1c13bfa2d..e305e8330 100644
 --- i/arch/arm64/include/uapi/asm/kvm.h
 +++ w/arch/arm64/include/uapi/asm/kvm.h
-@@ -158,6 +158,108 @@ struct kvm_sync_regs {
+@@ -158,6 +158,145 @@ struct kvm_sync_regs {
  	__u64 device_irq_level;
  };
  
@@ -167,6 +168,43 @@ index 1c13bfa2d..01ed12d53 100644
 +	 */
 +	__u64 keys_ok;		/* userspace: 1 to take the key writes here */
 +	__u64 mkey[2];		/* userspace: the machine key, lo and hi */
++	/*
++	 * Stores to write-protected leaf (level 3) guest page tables, taken here: the store (cas or
++	 * str of 64 bits at EL1) and each shadow copy's entry, from the table userspace publishes at
++	 * pt_table (struct kvm_arm_apple_pt_header, then pt_nslots struct kvm_arm_apple_pt_slot).
++	 */
++	__u64 pt_ok;		/* userspace: 1 to take them here */
++	__u64 pt_table;		/* userspace: the table's IPA */
++	__u64 pt_nslots;	/* userspace: a power of two */
++	__u64 pt_op;		/* kernel: 1 while it stores; userspace reuses a shadow page once all are 0 */
++	__u64 pt_handled;	/* kernel: stores it took */
++	__u64 pt_resync;	/* kernel: at exit KVM_ARM_APPLE_PT_RESYNC, the entry's IPA to resync */
++	__u64 pt_icache_pc[8];	/* kernel: the instructions it decoded, by address */
++	__u32 pt_icache_insn[8];
++	__u32 pt_icache_next;
++	__u32 pad4;
++	__u32 pt_why[16];	/* kernel: stores it left to userspace, by reason (kvm_arm_apple_pt_store) */
++};
++
++/* The table of struct kvm_arm_apple_fast's pt_table. */
++#define KVM_ARM_APPLE_PT_MAGIC		0x3154504154534146ULL	/* "FASTPAT1" */
++#define KVM_ARM_APPLE_PT_SLOTS_OFFSET	65536
++#define KVM_ARM_APPLE_PT_KEY_VALID	1ULL	/* key: the guest table page's IPA | 1 */
++#define KVM_ARM_APPLE_PT_KEY_TOMB	2ULL	/* a removed slot, which a lookup probes past */
++#define KVM_ARM_APPLE_PT_RESYNC		0x13f0	/* KVM_EXIT_HYPERCALL nr: resync pt_resync's shadows */
++struct kvm_arm_apple_pt_header {
++	__u64 magic;
++	__u32 nperms;
++	__u32 pad;
++	__u64 perms[32][16];	/* each set's permission bits by (AP_RO, AP_EL0, UXN, PXN); ~0: no access */
++};
++struct kvm_arm_apple_pt_slot {
++	__u32 seq;		/* odd while userspace writes the slot */
++	__u32 n;		/* mirrors: the shadow copies of the page */
++	__u64 key;
++	__u64 shadow[8];	/* each copy's shadow page IPA, 0 if it has none yet */
++	__u8 perm[8];		/* each copy's permission set */
++	__u8 pad[40];
 +};
 +/* The traps' 16-bit immediates (userspace's encoding: read 1, op1 3, crm 4, op2 3, rt 5). */
 +#define KVM_ARM_APPLE_FAST_ENTRY	0x1340	/* exception entry from a lower EL */
@@ -178,7 +216,7 @@ index 1c13bfa2d..01ed12d53 100644
  /* Bits for run->s.regs.device_irq_level */
  #define KVM_ARM_DEV_EL1_VTIMER		(1 << 0)
  #define KVM_ARM_DEV_EL1_PTIMER		(1 << 1)
-@@ -208,6 +310,19 @@ struct kvm_arm_counter_offset {
+@@ -208,6 +347,19 @@ struct kvm_arm_counter_offset {
  	__u64 reserved;
  };
  
@@ -408,7 +446,7 @@ index 54aedf93c..f5af23ecd 100644
  	if (vcpu_has_nv(vcpu)) {
  		if (vcpu_read_sys_reg(vcpu, HCR_EL2) & HCR_HCD)
 diff --git i/arch/arm64/kvm/mmu.c w/arch/arm64/kvm/mmu.c
-index 6dd5bfc32..2caf3510d 100644
+index 6dd5bfc32..f1d55bcf5 100644
 --- i/arch/arm64/kvm/mmu.c
 +++ w/arch/arm64/kvm/mmu.c
 @@ -1762,13 +1762,20 @@ static int pkvm_mem_abort(const struct kvm_s2_fault_desc *s2fd)
@@ -446,7 +484,7 @@ index 6dd5bfc32..2caf3510d 100644
  	/*
  	 * If we are not forced to use page mapping, check if we are
  	 * backed by a huge stage-1 mapping and thus use block mapping if
-@@ -2321,6 +2334,28 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
+@@ -2321,6 +2334,34 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
  	memslot = gfn_to_memslot(vcpu->kvm, gfn);
  	hva = gfn_to_hva_memslot_prot(memslot, gfn, &writable);
  	write_fault = kvm_is_write_fault(vcpu);
@@ -462,6 +500,12 @@ index 6dd5bfc32..2caf3510d 100644
 +		u64 far = kvm_vcpu_get_hfar(vcpu);
 +		struct kvm_run *run = vcpu->run;
 +
++		/* A store to a leaf page table whose shadows userspace published, done here. */
++		if (!is_iabt) {
++			ret = kvm_arm_apple_pt_store(vcpu, ipa | FAR_TO_FIPA_OFFSET(far), far, esr);
++			if (ret >= 0)
++				goto out_unlock;
++		}
 +		run->exit_reason = KVM_EXIT_ARM_FAULT;
 +		run->arm_fault.flags = (esr & ESR_ELx_FnV) ?
 +			0 : KVM_EXIT_ARM_FAULT_FLAG_GVA_VALID;
@@ -475,7 +519,7 @@ index 6dd5bfc32..2caf3510d 100644
  	if (kvm_is_error_hva(hva) || (write_fault && !writable)) {
  		/*
  		 * The guest has put either its instructions or its page-tables
-@@ -2405,6 +2440,61 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
+@@ -2405,6 +2446,61 @@ int kvm_handle_guest_abort(struct kvm_vcpu *vcpu)
  	return ret;
  }
  
@@ -538,10 +582,10 @@ index 6dd5bfc32..2caf3510d 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..0c921f5cb 100644
+index e566bbce7..f6741177b 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,433 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,608 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -795,6 +839,181 @@ index e566bbce7..0c921f5cb 100644
 +	f->snap_valid = 1;
 +}
 +
++/* A leaf guest descriptor as a shadow copy has it: its permission bits from the copy's set. */
++static u64 apple_pt_shadow_desc(const u64 *leaf, u64 d)
++{
++	const u64 bits = BIT_ULL(7) | BIT_ULL(6) | BIT_ULL(54) | BIT_ULL(53);
++	u32 index;
++
++	/* Invalid, or a level 3 descriptor without the table bit (reserved). */
++	if ((d & 3) != 3)
++		return 0;
++	index = (d & BIT_ULL(7) ? 8 : 0) | (d & BIT_ULL(6) ? 4 : 0) | (d & BIT_ULL(54) ? 2 : 0) |
++		(d & BIT_ULL(53) ? 1 : 0);
++	if (leaf[index] == ~0ULL)
++		return 0;
++	return (d & ~bits) | leaf[index];
++}
++
++/* The instruction at EL1 address pc, from the vCPU's stage-1 tables, cached by address. */
++static bool apple_pt_insn(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f, u64 pc, u32 *insn)
++{
++	struct s1_walk_info wi = { .regime = TR_EL10 };
++	struct s1_walk_result wr = {};
++	u32 i, v;
++
++	for (i = 0; i < ARRAY_SIZE(f->pt_icache_pc); i++) {
++		if (f->pt_icache_pc[i] == pc) {
++			*insn = f->pt_icache_insn[i];
++			return true;
++		}
++	}
++	if (__kvm_translate_va(vcpu, &wi, &wr, pc) || wr.failed ||
++	    kvm_read_guest(vcpu->kvm, wr.pa, &v, sizeof(v)))
++		return false;
++	*insn = le32_to_cpu(v);
++	i = f->pt_icache_next++ % ARRAY_SIZE(f->pt_icache_pc);
++	f->pt_icache_pc[i] = pc;
++	f->pt_icache_insn[i] = *insn;
++	return true;
++}
++
++/* A store kvm_arm_apple_pt_store leaves to userspace, counted by why. */
++static int apple_pt_why(struct kvm_arm_apple_fast *f, int why)
++{
++	if (why < ARRAY_SIZE(f->pt_why))
++		f->pt_why[why]++;
++	return -1;
++}
++
++/*
++ * A store at EL1 to a write-protected guest page table at ipa, taken here when the table is a leaf
++ * table userspace published (struct kvm_arm_apple_fast pt_*): the store, then each shadow copy's
++ * entry. 1: done, the guest resumes; 0: done, but userspace resyncs the entry
++ * (KVM_ARM_APPLE_PT_RESYNC); -1: userspace takes the fault as before.
++ */
++int kvm_arm_apple_pt_store(struct kvm_vcpu *vcpu, phys_addr_t ipa, u64 far, u64 esr)
++{
++	struct kvm_arm_apple_fast *f =
++		(void *)vcpu->run->s.padding + KVM_ARM_APPLE_FAST_OFFSET;
++	struct kvm_arm_apple_pt_slot slot;
++	struct kvm_host_map map;
++	u64 cpsr = *vcpu_cpsr(vcpu), page = ipa & PAGE_MASK, leaf[8][16];
++	u64 pc = *vcpu_pc(vcpu), base, va, cmp = 0, val, cur, sh, h, slots;
++	u32 insn, rn, rt, rs = 31, seq, i, k, probe;
++	bool cas, ok = true, resync = false, shadow_w;
++	unsigned long hva[8];
++	u64 *ptr;
++
++	if (READ_ONCE(f->magic) != KVM_ARM_APPLE_FAST_MAGIC || f->pt_ok != 1 || !f->pt_nslots ||
++	    (f->pt_nslots & (f->pt_nslots - 1)))
++		return apple_pt_why(f, 1);
++	if (vcpu->guest_debug)
++		return apple_pt_why(f, 13);
++	if (((cpsr >> 2) & 3) != 1)
++		return apple_pt_why(f, 14);
++	if (!apple_pt_insn(vcpu, f, pc, &insn))
++		return apple_pt_why(f, 2);
++	rn = (insn >> 5) & 31;
++	rt = insn & 31;
++	if ((insn & 0xffa07c00) == 0xc8a07c00) {		/* cas{,a,l,al} Xs, Xt, [Xn] */
++		cas = true;
++		rs = (insn >> 16) & 31;
++		va = 0;
++	} else if ((insn & 0xffc00000) == 0xf9000000) {		/* str Xt, [Xn, #imm] */
++		cas = false;
++		va = ((insn >> 10) & 0xfff) * 8;
++	} else {
++		return apple_pt_why(f, 3);
++	}
++	base = rn != 31 ? vcpu_get_reg(vcpu, rn) : (cpsr & 1) ? apple_sp_el1(vcpu, false, 0) :
++	       vcpu_gp_regs(vcpu)->sp;
++	va += base;
++	if ((va & 7) || (!(esr & ESR_ELx_FnV) && (far & ~PAGE_MASK) != (va & ~PAGE_MASK)))
++		return apple_pt_why(f, 4);
++	val = rt == 31 ? 0 : vcpu_get_reg(vcpu, rt);
++	if (cas)
++		cmp = rs == 31 ? 0 : vcpu_get_reg(vcpu, rs);
++
++	/* The page's slot: an even sequence number, the same before and after reading it. */
++	slots = f->pt_table + KVM_ARM_APPLE_PT_SLOTS_OFFSET;
++	h = ((page >> PAGE_SHIFT) * 0x9e3779b97f4a7c15ULL) >> (64 - ilog2(f->pt_nslots));
++	for (probe = 0; probe < 32; probe++, h = (h + 1) & (f->pt_nslots - 1)) {
++		if (kvm_read_guest(vcpu->kvm, slots + h * sizeof(slot), &slot, sizeof(slot)))
++			return apple_pt_why(f, 5);
++		if (slot.key == 0)
++			return apple_pt_why(f, 6);
++		if (slot.key == (page | KVM_ARM_APPLE_PT_KEY_VALID))
++			break;
++	}
++	if (probe == 32 || (slot.seq & 1) || slot.n == 0 || slot.n > ARRAY_SIZE(slot.shadow))
++		return apple_pt_why(f, 7);
++	for (k = 0; k < slot.n; k++) {
++		if (slot.perm[k] >= 32 ||
++		    kvm_read_guest(vcpu->kvm, f->pt_table + offsetof(struct kvm_arm_apple_pt_header, perms) +
++				   slot.perm[k] * sizeof(leaf[k]), leaf[k], sizeof(leaf[k])))
++			return apple_pt_why(f, 8);
++		/* A copy without a shadow page yet gets one from userspace, as the entry becomes valid. */
++		if (!slot.shadow[k] && apple_pt_shadow_desc(leaf[k], val))
++			return apple_pt_why(f, 9);
++		/* The shadows' memslot is read-only to the guest; the host's mapping of it is writable. */
++		hva[k] = slot.shadow[k] ? gfn_to_hva_prot(vcpu->kvm, slot.shadow[k] >> PAGE_SHIFT, &shadow_w) : 0;
++		if (slot.shadow[k] && kvm_is_error_hva(hva[k]))
++			return apple_pt_why(f, 10);
++	}
++	if (kvm_vcpu_map(vcpu, page >> PAGE_SHIFT, &map))
++		return apple_pt_why(f, 11);
++
++	/* Userspace reuses no shadow page while this runs, and the slot it published still stands. */
++	WRITE_ONCE(f->pt_op, 1);
++	smp_mb();
++	if (kvm_read_guest(vcpu->kvm, slots + h * sizeof(slot), &seq, sizeof(seq)) || seq != slot.seq) {
++		smp_mb();
++		WRITE_ONCE(f->pt_op, 0);
++		kvm_vcpu_unmap(vcpu, &map);
++		return apple_pt_why(f, 12);
++	}
++
++	ptr = (u64 *)((u8 *)map.hva + (va & ~PAGE_MASK));
++	if (cas) {
++		cur = cmpxchg64(ptr, cmp, val);
++		ok = cur == cmp;
++		if (rs != 31)
++			vcpu_set_reg(vcpu, rs, cur);
++	} else {
++		WRITE_ONCE(*ptr, val);
++	}
++	/* Each copy from the entry as it stands, again if another store changed it meanwhile. */
++	for (i = 0; ok && i < 4; i++) {
++		cur = READ_ONCE(*ptr);
++		for (k = 0; k < slot.n; k++) {
++			sh = apple_pt_shadow_desc(leaf[k], cur);
++			if (!hva[k]) {
++				resync |= sh != 0;
++				continue;
++			}
++			if (put_user(sh, (u64 __user *)(hva[k] + (va & ~PAGE_MASK))))
++				resync = true;
++		}
++		smp_mb();
++		if (READ_ONCE(*ptr) == cur)
++			break;
++	}
++	resync |= i == 4;
++	smp_mb();
++	WRITE_ONCE(f->pt_op, 0);
++	kvm_vcpu_unmap(vcpu, &map);
++
++	kvm_incr_pc(vcpu);
++	f->pt_handled++;
++	if (!resync)
++		return 1;
++	f->pt_resync = page | (va & ~PAGE_MASK);
++	vcpu->run->exit_reason = KVM_EXIT_HYPERCALL;
++	vcpu->run->hypercall = (typeof(vcpu->run->hypercall)) { .nr = KVM_ARM_APPLE_PT_RESYNC };
++	return 0;
++}
++
 +/* APCTL_EL1 at EL1: MKEYVld (bit 1) is read-only, KernKeyEn (bit 2) changes the keys above EL0. */
 +static int apple_fast_apctl(struct kvm_vcpu *vcpu, struct kvm_arm_apple_fast *f,
 +			    struct sys_reg_params *p)
@@ -975,7 +1194,7 @@ index e566bbce7..0c921f5cb 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5741,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5916,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -1015,7 +1234,7 @@ index e566bbce7..0c921f5cb 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +6253,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6428,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -1025,7 +1244,7 @@ index e566bbce7..0c921f5cb 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6263,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6438,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
