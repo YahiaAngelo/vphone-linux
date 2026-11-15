@@ -67,6 +67,8 @@ ap.add_argument("--cid", type=int, default=int(os.environ.get("CID", 3)))
 ap.add_argument("--runs", type=int, default=3)
 ap.add_argument("--settle", type=float, default=0)
 ap.add_argument("--no-warmup", dest="warmup", action="store_false")
+ap.add_argument("--phase", help="run only this phase, --reps times (to profile it from the host)")
+ap.add_argument("--reps", type=int, default=1)
 a = ap.parse_args()
 
 with open(os.path.join(HERE, "guestbench"), "rb") as f:
@@ -89,11 +91,12 @@ def run_once(i):
     label = f"vphone.guestbench.{os.getpid()}.{i}"
     outp = f"/var/root/guestbench.{i}.out"
     job = f"/var/root/Library/Caches/{label}.plist"
+    extra = f"<string>{a.phase}</string><string>{a.reps}</string>" if a.phase else ""
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{label}</string>
-<key>ProgramArguments</key><array><string>{DEST}</string><string>/var/root</string></array>
+<key>ProgramArguments</key><array><string>{DEST}</string><string>/var/root</string>{extra}</array>
 <key>StandardOutPath</key><string>{outp}</string>
 <key>StandardErrorPath</key><string>{outp}</string>
 <key>RunAtLoad</key><true/><key>LaunchOnlyOnce</key><true/>

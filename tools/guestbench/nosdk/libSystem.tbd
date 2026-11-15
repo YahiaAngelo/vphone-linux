@@ -1,0 +1,12 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: [ arm64-ios ]
+install-name: '/usr/lib/libSystem.B.dylib'
+current-version: 1351
+exports:
+  - targets: [ arm64-ios ]
+    symbols: [ _clock_gettime, _printf, _snprintf, _malloc, _free, _memset, _memcpy, _qsort, _open, _read,
+               _write, _lseek, _close, _unlink, _getppid, _mmap, _munmap, _pthread_create, _pthread_join,
+               _pthread_mutex_lock, _pthread_mutex_unlock, _bzero, _strcmp, ___stack_chk_fail, ___stack_chk_guard,
+               dyld_stub_binder ]
+...

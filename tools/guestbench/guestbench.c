@@ -231,8 +231,21 @@ int main(int argc, char **argv)
     };
     double total = 0;
     uint64_t check = 0;
+    /* guestbench DIR PHASE N: only PHASE, N times (to profile one phase from the host). */
+    const char *only = argc > 2 ? argv[2] : NULL;
+    int reps = 0;
+
+    for (const char *c = argc > 3 ? argv[3] : "1"; *c >= '0' && *c <= '9'; c++) {
+        reps = reps * 10 + (*c - '0');
+    }
     printf("guestbench");
     for (unsigned i = 0; i < sizeof phases / sizeof phases[0]; i++) {
+        if (only && strcmp(only, phases[i].name) != 0) {
+            continue;
+        }
+        for (int r = 1; only && r < reps; r++) {
+            check += phases[i].fn ? phases[i].fn() : phase_file(dir);
+        }
         double t0 = now();
         check += phases[i].fn ? phases[i].fn() : phase_file(dir);
         double dt = now() - t0;
