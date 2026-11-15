@@ -39,6 +39,19 @@ except Exception as e: print('port $port:', repr(e))" >> $R/vsock-probe.txt 2>&1
     printf 'target remote 127.0.0.1:1234\nset pagination off\ninfo threads\nthread apply all info registers pc cpsr sp lr x0 x1 x2 x3\nthread apply all x/6i $pc-12\ndetach\n' > $R/regs.gdb
     timeout 120 gdb -q -batch -x $R/regs.gdb > $R/regs.txt 2>&1
     top -b -H -n1 -p $(pgrep -x qemu-system-aar) | sed -n 8,14p > $R/cpu.txt
+    # With LOOP_PANIC=1: send vCPU 0 to an address it cannot fetch, so the guest panics and takes a stackshot
+    # of every process, decoded into $R/ps (panic-stackshot.py, xnu's kcdata.py).
+    if [ "${LOOP_PANIC:-0}" = 1 ]; then
+      printf 'target remote 127.0.0.1:1234\nthread 1\nset $pc=0x10\ndetach\n' > $R/panic.gdb
+      timeout 60 gdb -q -batch -x $R/panic.gdb > $R/panic-gdb.txt 2>&1
+      sleep 60
+      # The guest's NVRAM doesn't keep it, so read the panic log and stackshot from guest RAM, and decode it.
+      sudo -n python3 ~/Work/vphone-kvm-tools/panic-stackshot.py $(pgrep -x qemu-system-aar) $R/ps > $R/ps.txt 2>&1
+      sudo -n chown -R "$(id -un):" $R/ps
+      for k in $R/ps/stackshot*.kcdata; do
+        python3 ~/Work/src/xnu/tools/lldbmacros/kcdata.py -P $k > ${k%.kcdata}.json 2>/dev/null
+      done
+    fi
   fi
   echo "$(date +%T) boot$i $result ${t}s lines=$(wc -l < $R/serial.log) $(grep -a 'panic(cpu' $R/serial.log | head -1 | cut -c1-120)" | tee -a $OUT/results.txt
 done
