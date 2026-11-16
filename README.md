@@ -7,7 +7,6 @@
 [![CI validation](https://github.com/YahiaAngelo/vphone-linux/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/YahiaAngelo/vphone-linux/actions/workflows/validate.yml)
 [![Follow @YahiaDev on X](https://img.shields.io/badge/Follow-%40YahiaDev-000000?logo=x&logoColor=white)](https://x.com/YahiaDev)
 [![GitHub stars](https://img.shields.io/github/stars/YahiaAngelo/vphone-linux?style=flat&logo=github)](https://github.com/YahiaAngelo/vphone-linux/stargazers)
-[![MIT license](https://img.shields.io/github/license/YahiaAngelo/vphone-linux)](LICENSE)
 
 [Quick start](#quick-start) · [Documentation](#documentation) · [What works](#status) · [Known limits](#known-limits)
 
