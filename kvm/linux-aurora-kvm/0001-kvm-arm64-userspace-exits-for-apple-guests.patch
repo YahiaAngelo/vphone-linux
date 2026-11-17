@@ -1,5 +1,5 @@
 diff --git i/arch/arm64/include/asm/kvm_host.h w/arch/arm64/include/asm/kvm_host.h
-index 7f94635e6..4b234c77d 100644
+index 7f94635e6..cbeb69843 100644
 --- i/arch/arm64/include/asm/kvm_host.h
 +++ w/arch/arm64/include/asm/kvm_host.h
 @@ -309,6 +309,13 @@ enum fgt_group_id {
@@ -33,7 +33,23 @@ index 7f94635e6..4b234c77d 100644
  	unsigned long flags;
  
  	/* VM-wide vCPU feature set */
-@@ -1303,6 +1320,8 @@ int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
+@@ -942,6 +959,15 @@ struct kvm_vcpu_arch {
+ 
+ 	/* Hyp-readable copy of kvm_vcpu::pid */
+ 	pid_t pid;
++
++	/*
++	 * vphone-linux: EL0 reads of an Apple guest's SPRR registers this vCPU decoded, by address and
++	 * TTBR0_EL1 (the process): its read immediate and Rt (sys_regs.c apple_fast_el0_read).
++	 */
++	u64 apple_el0_va[32];
++	u64 apple_el0_ttbr[32];
++	u16 apple_el0_imm[32];
++	u8 apple_el0_rt[32];
+ };
+ 
+ /*
+@@ -1303,6 +1329,8 @@ int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
  int kvm_handle_cp15_32(struct kvm_vcpu *vcpu);
  int kvm_handle_cp15_64(struct kvm_vcpu *vcpu);
  int kvm_handle_sys_reg(struct kvm_vcpu *vcpu);
@@ -42,7 +58,7 @@ index 7f94635e6..4b234c77d 100644
  int kvm_handle_cp10_id(struct kvm_vcpu *vcpu);
  
  void kvm_sys_regs_create_debugfs(struct kvm *kvm);
-@@ -1504,6 +1523,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
+@@ -1504,6 +1532,11 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
  
  #define kvm_arm_vcpu_sve_finalized(vcpu) vcpu_get_flag(vcpu, VCPU_SVE_FINALIZED)
  
@@ -582,10 +598,10 @@ index 6dd5bfc32..f1d55bcf5 100644
  {
  	if (!kvm->arch.mmu.pgt || kvm_vm_is_protected(kvm))
 diff --git i/arch/arm64/kvm/sys_regs.c w/arch/arm64/kvm/sys_regs.c
-index e566bbce7..f6741177b 100644
+index e566bbce7..88e6961a1 100644
 --- i/arch/arm64/kvm/sys_regs.c
 +++ w/arch/arm64/kvm/sys_regs.c
-@@ -5299,6 +5299,608 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5299,6 +5299,624 @@ void kvm_reset_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_make_request(KVM_REQ_RELOAD_PMU, vcpu);
  }
  
@@ -752,13 +768,24 @@ index e566bbce7..f6741177b 100644
 +	u32 i, j, n = min_t(u32, READ_ONCE(f->nsites), ARRAY_SIZE(f->site_va));
 +	u32 nr = min_t(u32, READ_ONCE(f->nreads), ARRAY_SIZE(f->read_imm));
 +
++	u64 off = *vcpu_pc(vcpu) - vcpu_read_sys_reg(vcpu, VBAR_EL1);
++
++	/* The lower-EL synchronous slot's trap: its first word, or its second behind the guest's own fast path. */
 +	if (f->el0_ok != 1 || (spsr & (PSR_MODE32_BIT | PSR_MODE_MASK)) != PSR_MODE_EL0t ||
-+	    *vcpu_pc(vcpu) - vcpu_read_sys_reg(vcpu, VBAR_EL1) != 0x400)
++	    (off != 0x400 && off != 0x404))
 +		return 0;
 +	u16 imm = 0;
 +	u8 rt = 31;
++	u64 ttbr = vcpu_read_sys_reg(vcpu, TTBR0_EL1);
++	u32 c = (elr >> 2) % ARRAY_SIZE(vcpu->arch.apple_el0_va);
 +
-+	for (i = 0; i < n; i++) {
++	/* An instruction this vCPU decoded before, in this process. */
++	if (vcpu->arch.apple_el0_va[c] == elr && vcpu->arch.apple_el0_ttbr[c] == ttbr) {
++		imm = vcpu->arch.apple_el0_imm[c];
++		rt = vcpu->arch.apple_el0_rt[c];
++		f->pt_why[0]++;		/* debug: decode-cache hits */
++	}
++	for (i = 0; !imm && i < n; i++) {
 +		if (f->site_va[i] == elr) {
 +			imm = f->site_imm[i];
 +			rt = f->site_rt[i];
@@ -775,10 +802,15 @@ index e566bbce7..f6741177b 100644
 +		    kvm_read_guest(vcpu->kvm, wr.pa, &insn, sizeof(insn)))
 +			return 0;
 +		insn = le32_to_cpu(insn);
++		f->pt_why[15]++;	/* debug: stage-1 decodes */
 +		for (k = 0; k < ni; k++) {
 +			if ((insn & ~0x1fU) == f->el0_insn[k]) {
 +				imm = f->el0_insn_imm[k];
 +				rt = insn & 0x1f;
++				vcpu->arch.apple_el0_va[c] = elr;
++				vcpu->arch.apple_el0_ttbr[c] = ttbr;
++				vcpu->arch.apple_el0_imm[c] = imm;
++				vcpu->arch.apple_el0_rt[c] = rt;
 +				break;
 +			}
 +		}
@@ -1194,7 +1226,7 @@ index e566bbce7..f6741177b 100644
  /**
   * kvm_handle_sys_reg -- handles a system instruction or mrs/msr instruction
   *			 trap on a guest execution
-@@ -5314,6 +5916,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+@@ -5314,6 +5932,39 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
  
  	trace_kvm_handle_sys_reg(esr);
  
@@ -1234,7 +1266,7 @@ index e566bbce7..f6741177b 100644
  	if (triage_sysreg_trap(vcpu, &sr_idx))
  		return 1;
  
-@@ -5793,7 +6428,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5793,7 +6444,8 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  	 * This hacks into the ID registers, so only perform it when the
  	 * first vcpu runs, or the kvm_set_vm_id_reg() helper will scream.
  	 */
@@ -1244,7 +1276,7 @@ index e566bbce7..f6741177b 100644
  		u64 val;
  
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_AA64PFR0_EL1) & ~ID_AA64PFR0_EL1_GIC;
-@@ -5802,7 +6438,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
+@@ -5802,7 +6454,7 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu)
  		kvm_set_vm_id_reg(kvm, SYS_ID_AA64PFR2_EL1, val);
  		val = kvm_read_vm_id_reg(kvm, SYS_ID_PFR1_EL1) & ~ID_PFR1_EL1_GIC;
  		kvm_set_vm_id_reg(kvm, SYS_ID_PFR1_EL1, val);
