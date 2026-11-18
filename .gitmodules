@@ -4,12 +4,12 @@
 [submodule "qemu"]
 	path = qemu
 	url = https://github.com/YahiaAngelo/qemu-vphone.git
-	branch = vphone
+	branch = vphone-kvm
 [submodule "reims-vgpu"]
 	path = reims-vgpu
 	url = https://github.com/YahiaAngelo/reims-vgpu.git
-	branch = vphone-next4
+	branch = vphone-kvm-up
 [submodule "metal2vulkan"]
 	path = metal2vulkan
 	url = https://github.com/YahiaAngelo/metal2vulkan.git
-	branch = vphone-next4
+	branch = vphone-kvm-up2
