@@ -2,7 +2,7 @@ name: validate
 
 on:
   push:
-    paths: ['**.sh', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '**.py', 'tools/window/**', 'tests/sshramdisk-bootstrap/**', '.github/workflows/validate.yml']
+    paths: ['**.sh', 'vphone', 'setup/**', 'tools/**', 'linux-create/**', 'run-vphone.sh', '**.py', 'tools/window/**', 'tests/sshramdisk-bootstrap/**', '.github/workflows/validate.yml']
   pull_request:
   schedule:
     - cron: '0 3 * * 1'   # weekly: catch pairing/validation drift early
@@ -70,6 +70,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_sshramdisk_bootstrap.py' -v
       - name: CLI source ref selection and checkout preservation
         run: bash setup/test/cli-source-ref.sh
+      - name: vphone launcher CLI
+        run: bash setup/test/vphone-cli.sh
       - name: Explicit ECID selection regressions
         run: python3 -m unittest discover -s tests -p 'test_usbmux_connect.py' -v
       - name: Install shellcheck
@@ -83,12 +85,14 @@ jobs:
             echo "::  bash -n $f"
             bash -n "$f"
           done < <(find . -name '*.sh' -type f -print0)
+          bash -n vphone
       - name: shellcheck
         run: |
           set -e
           while IFS= read -r -d '' f; do
             shellcheck -x --severity=style "$f"
           done < <(find setup -name '*.sh' -type f -print0)
+          shellcheck -x --severity=style vphone
       - name: lint the workflow's own run blocks (extracted, whole-script checks)
         run: |
           set -e
