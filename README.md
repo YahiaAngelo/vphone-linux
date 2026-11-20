@@ -136,12 +136,31 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ```
 
 The setup scripts guide you through the process. `create-vm.sh` leaves the new VM running and
-unlocked. To start it again later:
+unlocked. To start it again later, use the `./vphone` launcher:
 
 ```sh
-./setup/start-vm.sh          # Start and unlock a VM (shows a menu if you have several)
-./setup/start-vm.sh --stop   # Shut down iOS
-./setup/start-vm.sh --list   # List your VMs and their running state
+./vphone                     # Start the VM (or set VPHONE_VM=NAME), wait until unlocked
+./vphone start --fast        # Return as soon as QEMU is up, without the unlock wait
+./vphone stop                # Shut down iOS
+./vphone list                # List your VMs and their running state
+./vphone logs                # Follow the VM's serial log
+```
+
+To run it as `vphone` from any directory, install the symlink once:
+
+```sh
+./vphone install             # links into ~/.local/bin (override with VPHONE_BIN_DIR)
+vphone list
+```
+
+The launcher resolves symlinks, so the link picks up this checkout's `setup/start-vm.sh`. If
+`~/.local/bin` is not on your `PATH`, `install` warns you instead of failing.
+
+`./vphone` is a thin wrapper around `setup/start-vm.sh`: it discovers VMs, forwards its environment,
+and keeps the same window and unlock behaviour. Run `./vphone help` for all commands. For direct
+control, including service profiles, the underlying script still works:
+
+```sh
 ./setup/start-vm.sh --trim   # Reduce background services and resource use
 ```
 

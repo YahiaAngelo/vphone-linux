@@ -1,7 +1,8 @@
 # Tools
 
-Scripts in `tools/`. Most of them change to the repository root first, so you can run them from
-anywhere. They need Python 3 (some need `python3-pillow`), `socat` and, for profiling, `perf`.
+Scripts in `tools/`, plus the root-level `./vphone` launcher. Most change to the repository root
+first, so you can run them from anywhere. They need Python 3 (some need `python3-pillow`), `socat`
+and, for profiling, `perf`.
 
 Common arguments:
 
@@ -17,6 +18,7 @@ Common arguments:
 
 | Script | Usage | What it does |
 |---|---|---|
+| `vphone` | `./vphone [start\|stop\|status\|list\|logs\|install\|help] [VM]`, `./vphone --fast` | Root-level launcher for an existing VM: finds the VM (or uses `$VPHONE_VM`) and calls `setup/start-vm.sh` with a window. `--fast` returns as soon as QEMU is up instead of waiting to unlock; `install` symlinks the command into `~/.local/bin` so it works from any directory. `MEM`, `SMP` and `TOOLBAR` pass through; the CID comes from the VM's `cid` file. With several VMs, pass a name (there is no menu). |
 | `check-host.sh` | `tools/check-host.sh` | Checks this PC against the requirements in SETUP.md (CPU, RAM, `/dev/shm`, Vulkan GPU, `/dev/vhost-vsock`, `vm.max_map_count`, Rust, meson). Changes nothing. |
 | `omarchy-window.sh` | `tools/omarchy-window.sh [--remove]` | Omarchy/Hyprland: adds a window rule (`~/.config/hypr/vphone-linux.lua`) so the iPhone window floats centred at its own shape instead of being tiled. `--remove` takes it out. |
 | `import-vm.sh` | `tools/import-vm.sh SOURCE NAME` | Copies a vphone-cli VM (a local path or `user@mac:path` over ssh) into `vms/NAME`, sparse, writes its `ecid` file and keeps a `vms/NAME.pristine` copy. |
