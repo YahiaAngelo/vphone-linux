@@ -12,8 +12,9 @@ control socket (REIMS_VGPU_WINDOW_CONTROL). It ends when QEMU does.
   returns to SpringBoard or wakes and swipes up from a locked screen; Lock powers down an awake
   screen or wakes a blanked one; volume uses `input.button`, screenshots go to ~/Pictures/vphone/,
   and Fold uses `display.posture`.
-- On a foldable guest, follows the hinge (`display.orientation`'s `fold_angle`, four times a
-  second, a change taken once two reads agree) and rotates the window: open, the guest draws the
+- On a foldable guest, follows the hinge (`display.orientation`'s `fold_angle`, polled in the
+  background twice a second once responding, a change taken once two reads agree) and rotates the
+  window: open, the guest draws the
   inner display a quarter turn round on the panel, so the window turns it a quarter clockwise and
   goes landscape; closed, the cover is upright.
 - Offers the host's clock to guests with the `clock` capability, once connected, every minute,
@@ -32,6 +33,7 @@ import json
 import math
 import os
 import plistlib
+import queue
 import select
 import shutil
 import socket
@@ -47,6 +49,8 @@ PORT = 1339
 BASE_BUTTONS = ["home", "lock", "volume-up", "volume-down", "screenshot"]
 ATLAS_ORDER = BASE_BUTTONS + ["fold"]   # the rows of tools/window/toolbar-<px>.rgba
 POLL = 0.25
+ORIENTATION_POLL_ONLINE = 0.5
+ORIENTATION_POLL_OFFLINE = 1.0
 
 
 def log(*a):
@@ -345,12 +349,77 @@ class Guest:
             rpc(self.cid, "display.posture", timeout=40, position="open")
 
 
+class OrientationPoller:
+    """Polls guest.orientation() in the background with adaptive backoff so clicks never block."""
+    ONLINE = ORIENTATION_POLL_ONLINE
+    OFFLINE = ORIENTATION_POLL_OFFLINE
+
+    def __init__(self, guest, on_update=None):
+        self.guest = guest
+        self.on_update = on_update
+        self.updates = queue.SimpleQueue()
+        self.stopping = threading.Event()
+        self.thread = None
+
+    def start(self):
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        self.stopping.set()
+        if self.thread is not None and self.thread.ident is not None:
+            self.thread.join(0.5)
+
+    def drain(self):
+        items = []
+        while True:
+            try:
+                items.append(self.updates.get_nowait())
+            except queue.Empty:
+                return items
+
+    def _run(self):
+        while not self.stopping.is_set():
+            o = self.guest.orientation()
+            if self.stopping.is_set():
+                break
+            if o is not None:
+                self.updates.put(o)
+                if self.on_update is not None:
+                    self.on_update()
+                interval = self.ONLINE
+            else:
+                interval = self.OFFLINE
+            self.stopping.wait(interval)
+
+
 # ------------------------------------------------------------------ the window
 class Window:
     def __init__(self, path):
         self.path = path
         self.sock = None
         self.buf = b""
+        self._wake_r, self._wake_w = os.pipe()
+        os.set_blocking(self._wake_r, False)
+        os.set_blocking(self._wake_w, False)
+
+    def wake(self):
+        if self._wake_w is None:
+            return
+        try:
+            os.write(self._wake_w, b"\x01")
+        except OSError:
+            pass
+
+    def _drain_wake(self):
+        if self._wake_r is None:
+            return
+        try:
+            while os.read(self._wake_r, 4096):
+                pass
+        except OSError:
+            pass
 
     def connect(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -375,13 +444,32 @@ class Window:
             self.sock.close()
         self.sock = None
 
+    def close(self):
+        self.drop()
+        for attr in ("_wake_r", "_wake_w"):
+            fd = getattr(self, attr, None)
+            if fd is not None:
+                setattr(self, attr, None)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
     def lines(self, timeout):
         """The lines the window sent within `timeout` (empty when none, or when it went away)."""
         if not self.sock:
-            time.sleep(timeout)
+            if self._wake_r is not None:
+                r, _, _ = select.select([self._wake_r], [], [], timeout)
+                if r:
+                    self._drain_wake()
+            else:
+                time.sleep(timeout)
             return []
-        r, _, _ = select.select([self.sock], [], [], timeout)
-        if not r:
+        watched = [self.sock] if self._wake_r is None else [self.sock, self._wake_r]
+        r, _, _ = select.select(watched, [], [], timeout)
+        if self._wake_r is not None and self._wake_r in r:
+            self._drain_wake()
+        if self.sock not in r:
             return []
         try:
             data = self.sock.recv(4096)
@@ -436,6 +524,7 @@ def main():
 
     # VPHONE_CLOCK_SYNC=0 leaves the guest clock alone (for a guest run at a deliberate offset).
     clock = ClockSync(a.cid) if os.environ.get("VPHONE_CLOCK_SYNC", "1") != "0" else None
+    poller = OrientationPoller(guest, on_update=getattr(win, "wake", None)) if foldable is not False else None
     try:
         while os.getppid() == owner:
             if not win.sock and win.connect():
@@ -449,24 +538,27 @@ def main():
                 win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
                 sent_buttons = buttons
 
-            o = guest.orientation() if foldable is not False else None
-            # The angle is absent until the hinge is first configured, even on a Duo.
-            if o is not None and foldable is None and "fold_angle" in o:
-                foldable = True
-                log("foldable guest")
-                buttons = BASE_BUTTONS + ["fold"]
-                if win.sock and buttons != sent_buttons:
-                    win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
-                    sent_buttons = buttons
+            if poller and win.sock:
+                poller.start()
 
-            if foldable and o is not None and o.get("fold_angle") is not None:
-                want = 90 if o["fold_angle"] >= 90 else 0
-                # A change is taken once two reads agree: the hinge sweeps through angles on its way.
-                if want != rotation and want == pending and win.sock:
-                    win.send(f"rotate {want}")
-                    rotation = want
-                    log(f"hinge {o['fold_angle']}°: window rotated {want}°")
-                pending = want
+            for o in (poller.drain() if poller else ()):
+                # The angle is absent until the hinge is first configured, even on a Duo.
+                if foldable is None and "fold_angle" in o:
+                    foldable = True
+                    log("foldable guest")
+                    buttons = BASE_BUTTONS + ["fold"]
+                    if win.sock and buttons != sent_buttons:
+                        win.send(f"toolbar {atlas_for(buttons, a.px)} {a.px} {','.join(buttons)}")
+                        sent_buttons = buttons
+
+                if foldable and o.get("fold_angle") is not None:
+                    want = 90 if o["fold_angle"] >= 90 else 0
+                    # A change is taken once two reads agree: the hinge sweeps through angles on its way.
+                    if want != rotation and want == pending and win.sock:
+                        win.send(f"rotate {want}")
+                        rotation = want
+                        log(f"hinge {o['fold_angle']}°: window rotated {want}°")
+                    pending = want
 
             for line in win.lines(POLL):
                 parts = line.split()
@@ -475,9 +567,14 @@ def main():
                 else:
                     log(f"unexpected from the window: {line!r}")
     finally:
+        if poller:
+            poller.stop()
         if clock:
             clock.stop()
-        win.drop()
+        if hasattr(win, "close"):
+            win.close()
+        else:
+            win.drop()
 
 
 if __name__ == "__main__":

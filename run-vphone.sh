@@ -148,6 +148,9 @@ export VPHONE_XPAGE_LINKS=${VPHONE_XPAGE_LINKS:-1}
 # The return's lookup (helper_vphone_lookup_fast) otherwise stalls on that entry's cache miss
 # (38% of its time); inline, QEMU's share of vCPU time fell from 47.8% to 44.6%.
 export VPHONE_RET_PREFETCH=${VPHONE_RET_PREFETCH:-2}
+# Read CNTVCT_EL0/CNTPCT_EL0 without taking the BQL when supported by QEMU
+# (qemu target/arm/tcg/translate-a64.c, VPHONE_FAST_CNT). 0 restores the BQL path.
+export VPHONE_FAST_CNT=${VPHONE_FAST_CNT:-1}
 # Broadcast TLB flushes (XNU's TLBI ...IS, thousands a second) as a barrier: every vCPU flushes its
 # own TLB and the source waits for them, falling back on QEMU's exclusive section (which stops
 # every vCPU) only when one is late (qemu accel/tcg/cputlb.c, QEMU_TLB_UNSYNCED). 0 restores the
@@ -203,11 +206,50 @@ fi
 [ -n "${TRACE:-}" ] && args+=(-trace "$TRACE")
 [ -n "${GDB:-}" ] && args+=(-gdb "tcp:127.0.0.1:$GDB" -S)
 
-# Hybrid hosts (this i7-14700K: P-cores 0-15, E-cores 16-27): keep QEMU on the performance
-# cores, where a vCPU thread runs TCG code far faster than on an efficiency core.
-# VPHONE_CPUS= (empty) leaves placement to the scheduler; any taskset list overrides.
-if [ -z "${VPHONE_CPUS+x}" ] && [ -r /sys/devices/cpu_core/cpus ]; then
-  VPHONE_CPUS=$(cat /sys/devices/cpu_core/cpus)
+detect_vcache_cpus() {
+  local dir raw val kb min_kb="" max_kb=0 list
+  local -A seen_max=()
+  local max_lists=()
+  for dir in /sys/devices/system/cpu/cpu[0-9]*/cache/index3; do
+    if [ ! -r "$dir/size" ] || [ ! -r "$dir/shared_cpu_list" ]; then
+      continue
+    fi
+    read -r raw < "$dir/size" || continue
+    case "$raw" in
+      *K) val=${raw%K}; [[ "$val" =~ ^[0-9]+$ ]] || continue; kb=$val ;;
+      *M) val=${raw%M}; [[ "$val" =~ ^[0-9]+$ ]] || continue; kb=$((val * 1024)) ;;
+      *G) val=${raw%G}; [[ "$val" =~ ^[0-9]+$ ]] || continue; kb=$((val * 1024 * 1024)) ;;
+      *)  [[ "$raw" =~ ^[0-9]+$ ]] || continue; kb=$((raw / 1024)) ;;
+    esac
+    read -r list < "$dir/shared_cpu_list" || continue
+    [ -n "$list" ] || continue
+    if [ -z "$min_kb" ] || [ "$kb" -lt "$min_kb" ]; then min_kb=$kb; fi
+    if [ "$kb" -gt "$max_kb" ]; then
+      max_kb=$kb
+      seen_max=()
+      max_lists=()
+    fi
+    if [ "$kb" -eq "$max_kb" ] && [ -z "${seen_max[$list]+x}" ]; then
+      seen_max[$list]=1
+      max_lists+=("$list")
+    fi
+  done
+  if [ -n "$min_kb" ] && [ "$max_kb" -gt "$min_kb" ] && [ ${#max_lists[@]} -gt 0 ]; then
+    local IFS=,
+    printf '%s\n' "${max_lists[*]}"
+  fi
+}
+
+# Hybrid Intel hosts (P-cores vs E-cores) and asymmetric AMD 3D V-Cache hosts (e.g. Ryzen 9
+# 9950X3D: 96 MiB L3 CCD 0-7,16-23 vs 32 MiB L3 CCD 8-15,24-31): keep QEMU on the fast/large-L3
+# cores where TCG translated blocks stay hot. VPHONE_CPUS= (empty) leaves placement to the
+# scheduler; any taskset list overrides.
+if [ -z "${VPHONE_CPUS+x}" ]; then
+  if [ -r /sys/devices/cpu_core/cpus ]; then
+    VPHONE_CPUS=$(cat /sys/devices/cpu_core/cpus)
+  else
+    VPHONE_CPUS=$(detect_vcache_cpus)
+  fi
 fi
 if [ -n "${VPHONE_CPUS:-}" ]; then
   exec taskset -c "$VPHONE_CPUS" "$QEMU" -M "$machine" "${args[@]}" "$@"

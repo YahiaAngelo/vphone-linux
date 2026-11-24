@@ -196,23 +196,64 @@ do_phase sources && {
 }
 
 # --------------------------------------------------------------- 3. build ---
+VPHONE_DEBUG_BUILD=${VPHONE_DEBUG_BUILD:-0}
+
+qemu_release_args() {
+  [ "$VPHONE_DEBUG_BUILD" = 0 ] || return 0
+  local cc=${CC:-cc}
+  local cflags="-O3 -march=native -DNDEBUG -DG_DISABLE_ASSERT"
+  local flag
+  for flag in -fno-zero-call-used-regs -fzero-call-used-regs=skip; do
+    if printf 'int x;\n' | "$cc" -x c "$flag" -c - -o /dev/null 2>/dev/null; then
+      cflags+=" $flag"
+      break
+    fi
+  done
+  if printf 'int x;\n' | "$cc" -x c -ftrivial-auto-var-init=uninitialized -c - -o /dev/null 2>/dev/null; then
+    cflags+=" -ftrivial-auto-var-init=uninitialized"
+  fi
+  local opts=(--disable-debug-info --enable-lto --disable-stack-protector)
+  if [ "$(uname -m)" = x86_64 ] && [ -r /proc/cpuinfo ]; then
+    local cpu_flags
+    cpu_flags=$(grep -m1 '^flags' /proc/cpuinfo || true)
+    if [[ " $cpu_flags " == *" avx512f "* ]] &&
+       [[ " $cpu_flags " == *" avx512bw "* ]] &&
+       [[ " $cpu_flags " == *" avx512cd "* ]] &&
+       [[ " $cpu_flags " == *" avx512dq "* ]] &&
+       [[ " $cpu_flags " == *" avx512vl "* ]]; then
+      opts+=(--x86-version=4)
+    fi
+  fi
+  opts+=("--extra-cflags=$cflags")
+  printf '%s\0' "${opts[@]}"
+}
+
 build_reims() {
   # Always: cargo rebuilds only what changed, and a submodule update must reach the library
   # (QEMU is relinked below when the library is newer than it).
   log " Building reims-vgpu (the first build is long: its static lib is ~800 MB)"
-  make -C "$VSETUP_SRC/reims-vgpu"
+  if [ "$VPHONE_DEBUG_BUILD" = 0 ] && [[ " ${RUSTFLAGS:-} " != *"target-cpu="* ]]; then
+    RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native" make -C "$VSETUP_SRC/reims-vgpu"
+  else
+    make -C "$VSETUP_SRC/reims-vgpu"
+  fi
 }
 build_qemu() {
   # Always: ninja rebuilds only what changed, so an update of the qemu submodule (or a newer
   # reims-vgpu library, which QEMU links statically) reaches the binary.
   local pkgcfg="$VSETUP_SRC/reims-vgpu/target/dist-vulkan/lib/pkgconfig"
+  local qemu_extra=() opt
+  while IFS= read -r -d '' opt; do
+    qemu_extra+=("$opt")
+  done < <(qemu_release_args)
   log " Building QEMU (-M vresearch101) against reims-vgpu"
   mkdir -p "$VSETUP_SRC/qemu/build"
   ( export PKG_CONFIG_PATH=$pkgcfg
     cd "$VSETUP_SRC/qemu/build"
     [ -f config.status ] || ../configure --target-list=aarch64-softmmu --enable-pvg \
       --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
-      --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug
+      --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug \
+      "${qemu_extra[@]}"
     ninja qemu-system-aarch64 )
 }
 build_creator() {

@@ -198,8 +198,9 @@ Environment variables read by `run-vphone.sh`:
 | `VPHONE_TLB_RANGE_PAGES` | `1` | Range flushes compare page count with TLB entry count. `0` = upstream |
 | `VPHONE_XPAGE_LINKS` | `1` | Checked cross-page direct-branch links |
 | `VPHONE_RET_PREFETCH` | `2` | Return-address jump cache prefetch at calls: `2` inline, `1` through a helper, `0` off |
+| `VPHONE_FAST_CNT` | `1` | Read `CNTVCT_EL0`/`CNTPCT_EL0` without taking the BQL or exiting the TB. `0` restores QEMU's BQL path |
 | `VPHONE_XHCI_NONREMOVABLE` | `0x1fe` | Bit n marks xHCI root port n non-removable. Needed for touch |
-| `VPHONE_CPUS` | `/sys/devices/cpu_core/cpus` (P-cores), if present | `taskset` CPU list for QEMU. Empty = no pinning |
+| `VPHONE_CPUS` | `/sys/devices/cpu_core/cpus` (Intel P-cores), else the largest-L3 CCD on asymmetric AMD 3D V-Cache hosts, if present | `taskset` CPU list for QEMU. Empty = no pinning |
 | `CID` | `3` | vsock guest CID, unique per running VM. `0` = no vsock |
 | `VSOCK` | `vhost` | `vhost` (kernel vhost-vsock), `uds` (`virtio-vsock-uds-pci`, branch `vsock-uds`), `auto` |
 | `VSOCK_DIR` | `/tmp/vphone-vsock` | Directory of the `uds` sockets (`$CID.sock`) |
@@ -207,6 +208,14 @@ Environment variables read by `run-vphone.sh`:
 | `DFLAGS` | | QEMU log items (`-d`), e.g. `guest_errors,unimp` |
 | `TRACE` | | QEMU trace pattern (`-trace`) |
 | `GDB` | | Port: start halted and wait for gdb |
+
+## Build switches
+
+Environment variables read by `build.sh` and `setup/setup.sh`:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `VPHONE_DEBUG_BUILD` | `0` | `0` (default) builds QEMU with `--disable-debug-info --enable-lto --disable-stack-protector`, `--x86-version=4` when the x86-64 host has AVX-512 (`avx512f/bw/cd/dq/vl`), `-O3 -march=native -DNDEBUG -DG_DISABLE_ASSERT`, and compiler-probed zero-call-used-regs / trivial-auto-var-init suppression, and builds `reims-vgpu` with `RUSTFLAGS="-C target-cpu=native"` (unless `target-cpu=` is already set). `1` restores upstream debug-info/default configure flags. Remove `qemu/build` to reconfigure an existing build directory |
 
 ## QEMU switches (fork, environment)
 
@@ -228,7 +237,7 @@ the launcher overrides some of them (above).
 | `VPHONE_IBC` | on | Per-site indirect-branch cache; `0` = jump cache lookup. `VPHONE_IBC_REPLACE` sets how many other-target misses replace a valid slot (default 8) | `target/arm/tcg/translate-a64.c`, `accel/tcg/cpu-exec.c` |
 | `VPHONE_INLINE_ZVA` | on | `DC ZVA` in generated code; `0` = helpers | `target/arm/tcg/translate-a64.c` |
 | `VPHONE_FENCE` | 1 | Acquire/release on a TSO host: one fence per release store; `0` = upstream mapping | `target/arm/tcg/translate-a64.c` |
-| `VPHONE_FAST_CNT` | off | Counter reads without the BQL or a TB exit (no measured effect on iOS) | `target/arm/helper.c`, `target/arm/tcg/translate-a64.c` |
+| `VPHONE_FAST_CNT` | off | Counter reads without the BQL or a TB exit (the launcher sets 1; no isolated gain measured on iOS yet) | `target/arm/helper.c`, `target/arm/tcg/translate-a64.c` |
 | `VPHONE_MARK` | off | Diagnostic: `hint #0x7e` phase markers log host instructions/cycles/CPU time per guest phase; `VPHONE_INSN_STATS`, `VPHONE_SYSREG_STATS` count instruction classes and system registers | `target/arm/tcg/translate-a64.c` |
 | `VPHONE_NATIVE_FP` | on | A64 FP/Neon as host SSE/AVX instructions; `0` = helpers (and softfloat's hardfloat) as before | `target/arm/tcg/host-fpcr.h`, `translate-a64.c` |
 | `VPHONE_FAST_F32` | on | Neon float32 add/sub/mul/fused multiply-add on the host's SIMD; `0` = softfloat lane by lane | `target/arm/tcg/vec-f32-fast.h` |
