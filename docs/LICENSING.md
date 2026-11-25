@@ -5,7 +5,7 @@ advice; each project's own license files are authoritative.
 
 | Part | Where | License |
 |---|---|---|
-| Glue: `run-vphone.sh`, `build.sh`, `tools/`, `docs/`, `patches/`, `linux-create/`, and `kvm/` except the kernel files below | this repository | **MIT** ([`LICENSE`](../LICENSE)) |
+| Glue: `run-vphone.sh`, `build.sh`, `tools/`, `docs/`, `patches/`, `linux-create/`, `examples/`, and `kvm/` except the kernel files below | this repository | **MIT** ([`LICENSE`](../LICENSE)) |
 | QEMU fork | `qemu/` submodule: [qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone), a fork of [ChefKissInc/QEMUAppleSilicon](https://github.com/ChefKissInc/QEMUAppleSilicon) | **GPL-3.0** overall. The upstream project's own code: **AGPL-3.0**. QEMU's code keeps its original licenses, mostly GPL-2.0-or-later. The files vphone-linux added (`hw/vmapple/vresearch101.c`, `vpiop.c`, `sep-storage.c`, ...) carry `SPDX-License-Identifier: GPL-2.0-or-later` headers. See `qemu/LICENSE` and `qemu/COPYING*`. |
 | KVM backend in the QEMU fork | `qemu/target/arm/apple-virt.c`, `qemu/hw/arm/apple-silicon/virt_patches.c` (from ChefKiss Inferno's KVM backend, with vphone changes); `qemu/accel/accel-private.c` | `apple-virt.c` and `virt_patches.c`: **AGPL-3.0-or-later** (their headers). `accel-private.c`: **GPL-2.0-or-later**, QEMU's terms (its header) |
 | Linux kernel patch | `kvm/linux-aurora-kvm/0001-kvm-arm64-userspace-exits-for-apple-guests.patch`, and the kernel code `kvm/apply-kernel-edits.py` inserts | **GPL-2.0**, Linux's license, as a change to Linux |

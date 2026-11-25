@@ -58,6 +58,9 @@ needed for real devices; the VM does not need it.
 
 ## 3. Create an app
 
+For a ready-made example, [examples/PerfTest](../examples/PerfTest) is a small benchmark app that
+measures how fast the VM runs guest code.
+
 ```sh
 xtool new HelloVPhone
 cd HelloVPhone

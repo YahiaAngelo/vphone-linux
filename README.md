@@ -206,6 +206,7 @@ vphone-linux/
 ├── linux-create/          vphone-cli's firmware tooling built for Linux (fw, restore, cfw)
 ├── patches/               small patches for vphone-cli (Mac side)
 ├── kvm/                   Apple Silicon hosts: the linux-aurora-kvm package and KVM test tools
+├── examples/              sample iOS apps (PerfTest: a benchmark of the VM)
 ├── docs/
 ├── qemu/                  submodule: qemu-vphone, branch vphone-kvm
 ├── reims-vgpu/            submodule: reims-vgpu fork, branch vphone-kvm-up
