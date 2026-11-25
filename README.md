@@ -12,7 +12,7 @@
 
 </div>
 
-Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**, or on Windows 11 under WSL2 ([docs/WSL.md](docs/WSL.md)).
+Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**, on an **Apple Silicon Mac running Linux** with KVM ([docs/KVM.md](docs/KVM.md)), or on Windows 11 under WSL2 ([docs/WSL.md](docs/WSL.md)).
 
 <p align="center">
   <img src="docs/screenshots/lock-screen.png" width="200" alt="Lock screen">
@@ -29,7 +29,7 @@ Linux with no Mac at all** (see [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.m
 
 - **QEMU** (a fork of [ChefKissInc/QEMUAppleSilicon](https://github.com/ChefKissInc/QEMUAppleSilicon)) gains a
   `-M vresearch101` machine and an `apple-gxf` CPU (GXF/SPRR for SPTM and TXM). It runs the guest
-  under TCG with 8 vCPUs and models the SEP coprocessor, the GIC wiring, a USB touchscreen, vsock and
+  under TCG with 8 vCPUs (or natively under KVM on Apple Silicon) and models the SEP coprocessor, the GIC wiring, a USB touchscreen, vsock and
   the paravirtual GPU's MMIO device.
 - **[reims-vgpu](https://github.com/steelbrain/reims-vgpu)** implements Apple's ParavirtualizedGraphics
   protocol on the host. It is statically linked into QEMU.
@@ -43,6 +43,12 @@ the Linux build of vphone-cli's firmware tooling (`linux-create/`) and the docum
 
 So far tested on one PC: Fedora 44, Intel i7-14700K, 62 GB RAM, NVIDIA RTX 4080 SUPER (driver
 615.71.09).
+
+**Apple Silicon (KVM):** tested on one M1 Pro MacBook Pro (16 GB RAM) running Omarchy-M, with a
+patched kernel (`linux-aurora-kvm`). The VM boots to the home screen in about a minute, and apps,
+Safari and its JIT run. It was tested with a VM created on a Mac
+([docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md)); creating one on an Apple Silicon Linux host is
+untested. Setup and known issues: [docs/KVM.md](docs/KVM.md).
 
 Linux distributions `setup/setup.sh` supports, and how far each was tested:
 
@@ -105,8 +111,8 @@ Tested guest pairings on Linux:
 
 ### Known limits
 
-- **Speed.** The guest's arm64e code runs under TCG (there is no hardware virtualization of arm64 on
-  x86). A cold app launch took about 19-20 s and a warm one 4-8 s in an earlier measurement
+- **Speed.** On x86 the guest's arm64e code runs under TCG (there is no hardware virtualization of
+  arm64 on x86); on Apple Silicon it runs natively under KVM ([docs/KVM.md](docs/KVM.md)). A cold app launch took about 19-20 s and a warm one 4-8 s in an earlier measurement
   (2026-10-19); later TCG work made indirect-branch lookups and TLB refills much cheaper.
   Scrolling Settings now runs at about 60-68 frames/s on average, with occasional 50-110 ms stalls
   (guest CPU work at emulated speed).
@@ -126,6 +132,8 @@ Tested guest pairings on Linux:
 You need a Linux x86_64 PC with a Vulkan GPU (NVIDIA is the only vendor tested so far), at least
 16 GB RAM, about 100 GB of free disk space, and `sudo` access. No Mac is required. See
 [What you need](docs/SETUP.md#1-what-you-need) for supported distributions and more detail.
+On an Apple Silicon Mac running Linux, install the patched kernel and host settings from
+[docs/KVM.md](docs/KVM.md) first, and run the VM with `ACCEL=kvm`.
 
 Run these commands from a terminal:
 
@@ -178,6 +186,7 @@ instead. The step-by-step manual path, with the packages and every command, is
 | [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.md) | The create flow in detail: firmware, restore over USB/IP, custom firmware, first boot |
 | [docs/APP-DEVELOPMENT.md](docs/APP-DEVELOPMENT.md) | Developing iOS apps on Linux with xtool: build, run in the VM, read the log, iterate |
 | [docs/CREATE-ON-MAC.md](docs/CREATE-ON-MAC.md) | Optional: creating the VM with vphone-cli on a Mac and copying it over |
+| [docs/KVM.md](docs/KVM.md) | Running on an Apple Silicon Mac under Linux with KVM: the patched kernel, host settings, known issues |
 | [docs/WSL.md](docs/WSL.md) | Running on Windows 11 under WSL2: what differs (lavapipe, the kernel tree for APFS) and the one-time setup |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Known problems and fixes |
 | [docs/ADVANCED.md](docs/ADVANCED.md) | Building by hand, display scale, services, GPU clocks |
@@ -196,17 +205,18 @@ vphone-linux/
 ├── tools/                 test, input, vphoned and profiling scripts (docs/TOOLS.md)
 ├── linux-create/          vphone-cli's firmware tooling built for Linux (fw, restore, cfw)
 ├── patches/               small patches for vphone-cli (Mac side)
+├── kvm/                   Apple Silicon hosts: the linux-aurora-kvm package and KVM test tools
 ├── docs/
-├── qemu/                  submodule: qemu-vphone, branch vphone
-├── reims-vgpu/            submodule: reims-vgpu fork, branch vphone
-├── metal2vulkan/          submodule: metal2vulkan fork, branch vphone
+├── qemu/                  submodule: qemu-vphone, branch vphone-kvm
+├── reims-vgpu/            submodule: reims-vgpu fork, branch vphone-kvm-up
+├── metal2vulkan/          submodule: metal2vulkan fork, branch vphone-kvm-up2
 ├── vms/                   your VM bundles (ignored by git)
 └── runs/                  test-run output (ignored by git)
 ```
 
 The submodules are [qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone),
 [reims-vgpu](https://github.com/YahiaAngelo/reims-vgpu) and
-[metal2vulkan](https://github.com/YahiaAngelo/metal2vulkan), each on its `vphone` branch.
+[metal2vulkan](https://github.com/YahiaAngelo/metal2vulkan), on the branches above (`.gitmodules`).
 reims-vgpu's `Cargo.toml` takes metal2vulkan from `../metal2vulkan`, so the submodules must stay side by
 side as above. vphone-cli is not a submodule: on a Mac it
 runs from its own releases, and `linux-create/sync-sources.sh` builds its firmware tooling from a

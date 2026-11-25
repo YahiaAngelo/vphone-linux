@@ -7,7 +7,8 @@ See [docs/KVM.md](../docs/KVM.md) for what this is for and how the QEMU side wor
   emulation needs: `KVM_CAP_ARM_HVC_TO_USER` (253), `KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER` (254),
   `KVM_CAP_ARM_FAULT_TO_USER` (255), `KVM_CAP_ARM_TIMER_TO_USER` (256), `KVM_ARM_SET_WRITE_PROTECT`
   (all as in ChefKiss Inferno's KVM backend) and `KVM_CAP_ARM_GIC_SYSREG_TO_USER` (257, vphone's:
-  the GICv3 CPU interface goes to QEMU's GIC models). It installs next to `linux-aurora` as its own
+  the GICv3 CPU interface goes to QEMU's GIC models), plus in-kernel fast paths for the hottest
+  traps, versioned by `KVM_CAP_ARM_APPLE_FAST` (258), which QEMU checks at start. It installs next to `linux-aurora` as its own
   Limine entry; `linux-aurora` stays the default.
 - `kvm-exits-test.c`: runs a bare vCPU through each new exit.
 - `apply-kernel-edits.py`: makes the patch from a linux-aurora tree (re-run it on a newer one).
@@ -17,6 +18,8 @@ See [docs/KVM.md](../docs/KVM.md) for what this is for and how the QEMU side wor
     sudo pacman -S --needed bc dtc rustup clang llvm lld clang18 llvm18 lld18 xmlto
     cd linux-aurora-kvm && makepkg -s               # about an hour on an M1 Pro
     sudo pacman -U linux-aurora-kvm-7*.pkg.tar.xz    # the headers package is optional
+
+The full guide (host settings, Limine, running, known issues) is in [docs/KVM.md](../docs/KVM.md).
 
 After changing the patch, `makepkg -ef` rebuilds from the existing tree in minutes.
 

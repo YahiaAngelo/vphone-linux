@@ -1,7 +1,9 @@
 # AArch64 Apple Silicon (Aurora Silicon), with KVM userspace exits for vphone-linux.
 #
 # linux-aurora plus one patch: KVM_CAP_ARM_{HVC,IMPDEF_SYSREG,FAULT,TIMER}_TO_USER and
-# KVM_ARM_SET_WRITE_PROTECT, the interface ChefKiss Inferno's KVM backend uses.
+# KVM_ARM_SET_WRITE_PROTECT (the interface ChefKiss Inferno's KVM backend uses),
+# KVM_CAP_ARM_GIC_SYSREG_TO_USER, and in-kernel fast paths for Apple guests whose layout
+# KVM_CAP_ARM_APPLE_FAST versions (QEMU checks it). See docs/KVM.md in vphone-linux.
 # It installs next to linux-aurora (own pkgbase, own modules directory).
 # Based on the asahi-alarm linux-asahi package by Jos Dehaes and Matthias Kurz.
 #
@@ -50,7 +52,7 @@ sha256sums=('aca7420a18139474da62a81c77fc6e5c3f25001f872b6e11e18605cd892aa4c3'
             '443a9c4613172ea352f49b114818a1d75ab048ec4bd2d75b388a7ab3a8a1f046'
             '84a03d5fea19cae243c89f50c1736c639622d25d4d1de8d7d53ebd8f603c0f62'
             '98f76a885d81711013aad47e2ee13f000923191e43321738ec8f381690bf5160'
-            'c174b607432ea4b6c5bb46c066e87f9047ad80175fbace0b51081f7787ef8e48')
+            '927c5a865be9cf2e9458e8fa5bf46626a2e3aaf0a7d0241448d18c4e5cdded4f')
 
 # Kbuild takes ARCH literally and knows arm64, not aarch64.
 export ARCH=arm64
