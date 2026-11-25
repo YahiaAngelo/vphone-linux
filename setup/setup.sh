@@ -143,6 +143,12 @@ do_phase deps && {
   if [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
     PATH=$HOME/.cargo/bin:$PATH
   fi
+  # Arch's rustup package also ships the cargo proxy with no toolchain: cargo then fails
+  # ("rustup could not choose a version of cargo to run") until one is the default (#68).
+  if have rustup && ! rustup default >/dev/null 2>&1; then
+    log " Setting the stable Rust toolchain as rustup's default"
+    rustup default stable
+  fi
   if ! have rcodesign; then
     log " Installing rcodesign (apple-codesign)"
     cargo install apple-codesign --locked
