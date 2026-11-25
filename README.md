@@ -1,4 +1,16 @@
+<div align="center">
+
 # vphone-linux
+
+**Run a virtual iPhone on Linux — no Mac required.**
+
+[![CI validation](https://github.com/YahiaAngelo/vphone-linux/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/YahiaAngelo/vphone-linux/actions/workflows/validate.yml)
+[![Follow @YahiaDev on X](https://img.shields.io/badge/Follow-%40YahiaDev-000000?logo=x&logoColor=white)](https://x.com/YahiaDev)
+[![GitHub stars](https://img.shields.io/github/stars/YahiaAngelo/vphone-linux?style=flat&logo=github)](https://github.com/YahiaAngelo/vphone-linux/stargazers)
+
+[Quick start](#quick-start) · [Documentation](#documentation) · [What works](#status) · [Known limits](#known-limits)
+
+</div>
 
 Run [vphone-cli](https://github.com/Lakr233/vphone-cli)'s virtual iPhone on a **Linux x86_64 host**, or on Windows 11 under WSL2 ([docs/WSL.md](docs/WSL.md)).
 
@@ -26,8 +38,6 @@ Linux with no Mac at all** (see [docs/CREATE-ON-LINUX.md](docs/CREATE-ON-LINUX.m
 
 This repository is the glue: the launcher (`run-vphone.sh`), the test and profiling tools (`tools/`),
 the Linux build of vphone-cli's firmware tooling (`linux-create/`) and the documentation. The three forks are git submodules (see [Repository layout](#repository-layout)).
-
-Development updates: [@YahiaDev on X](https://x.com/YahiaDev).
 
 ## Status
 
@@ -93,7 +103,7 @@ Tested guest pairings on Linux:
   Apple's `AVPBooter`/`AVPSEPBooter`. Everything else comes from Apple's published IPSWs and
   vphone-cli's release zip.
 
-**Known limits**
+### Known limits
 
 - **Speed.** The guest's arm64e code runs under TCG (there is no hardware virtualization of arm64 on
   x86). A cold app launch took about 19-20 s and a warm one 4-8 s in an earlier measurement
@@ -113,26 +123,29 @@ Tested guest pairings on Linux:
 
 ## Quick start
 
-You need a Linux x86_64 PC with a Vulkan GPU (NVIDIA tested), 16 GB RAM or more, about 100 GB free
-disk (the tools and builds, about 11 GB of firmware, a VM of 20-25 GB, and room to make it; `create-vm.sh`
-checks), and sudo. No Mac. **Two steps**:
+You need a Linux x86_64 PC with a Vulkan GPU (NVIDIA is the only vendor tested so far), at least
+16 GB RAM, about 100 GB of free disk space, and `sudo` access. No Mac is required. See
+[What you need](docs/SETUP.md#1-what-you-need) for supported distributions and more detail.
+
+Run these commands from a terminal:
 
 ```sh
 git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
-./setup/setup.sh                    # deps + sources + all binaries (re-runnable)
-./setup/create-vm.sh                # pick a device and an iOS version; it creates the VM
+./setup/setup.sh       # Install dependencies and build the tools (safe to re-run)
+./setup/create-vm.sh   # Choose a device and iOS version, then create and start the VM
 ```
 
-`create-vm.sh` leaves the new VM running and unlocked. **To use it again later**:
+The setup scripts guide you through the process. `create-vm.sh` leaves the new VM running and
+unlocked. To start it again later:
 
 ```sh
-./setup/start-vm.sh                 # starts it in its window and unlocks it (a menu if you have several)
-./setup/start-vm.sh --stop          # shuts iOS down (closing the window powers it off too)
-./setup/start-vm.sh --list          # your VMs, and which are running
-./setup/start-vm.sh --trim          # turn off ~137 background daemons (--untrim turns them on)
+./setup/start-vm.sh          # Start and unlock a VM (shows a menu if you have several)
+./setup/start-vm.sh --stop   # Shut down iOS
+./setup/start-vm.sh --list   # List your VMs and their running state
+./setup/start-vm.sh --trim   # Reduce background services and resource use
 ```
 
-`--trim` (also on `create-vm.sh`) applies vphoned's `trimmed` service profile: Siri and
+`--trim` (also available on `create-vm.sh`) applies vphoned's `trimmed` service profile: Siri and
 intelligence, Find My, Wallet, Watch, Home, health coaching, telemetry, ads, the App Store and
 sign-in follow-ups stay off, so the guest runs about a third fewer processes and uses less memory
 and disk. It does not make the guest itself faster, but it keeps it steadier. The first boot after
