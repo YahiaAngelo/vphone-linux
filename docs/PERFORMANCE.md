@@ -210,7 +210,7 @@ Environment variables read by `run-vphone.sh`:
 
 ## Build switches
 
-Environment variables read by `build.sh` and `setup/setup.sh`. All default to `0`, keeping QEMU debug info, asserts, and hardening flags unchanged from upstream. Changing any switch automatically reconfigures `qemu/build` via `qemu/build/.vphone-build-flags`.
+Environment variables read by `build.sh` and `setup/setup.sh`. All default to `0`, keeping QEMU debug info, asserts, and hardening flags unchanged from upstream. `qemu/build/.vphone-build-flags` records both the active build switches and the SHA-256 hash of `reims-vgpu/target/dist-vulkan/include/reims_vgpu.h`; when either changes, `qemu/build` is removed and configured from scratch so Meson's cached header checks do not go stale.
 
 | Variable | Default | What it does |
 |---|---|---|
