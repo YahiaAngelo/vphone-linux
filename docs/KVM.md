@@ -176,8 +176,9 @@ exactly; 257 is vphone's.
 
 ## Licensing
 
-`apple-virt.c`, `accel-private.c` and `virt_patches.c` come from ChefKiss Inferno and are
-AGPL-3.0; see docs/LICENSING.md.
+`apple-virt.c` and `virt_patches.c` come from ChefKiss Inferno's KVM backend and are
+AGPL-3.0-or-later. `accel-private.c` is GPL-2.0-or-later. The kernel patch is GPL-2.0, as part of
+Linux. See [LICENSING.md](LICENSING.md).
 
 ## Fixes found on the way (all in the `vphone-kvm` QEMU branch unless noted)
 

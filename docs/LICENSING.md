@@ -5,8 +5,12 @@ advice; each project's own license files are authoritative.
 
 | Part | Where | License |
 |---|---|---|
-| Glue: `run-vphone.sh`, `tools/`, `docs/`, `patches/`, `linux-create/` | this repository | **MIT** ([`LICENSE`](../LICENSE)) |
+| Glue: `run-vphone.sh`, `build.sh`, `tools/`, `docs/`, `patches/`, `linux-create/`, and `kvm/` except the kernel files below | this repository | **MIT** ([`LICENSE`](../LICENSE)) |
 | QEMU fork | `qemu/` submodule: [qemu-vphone](https://github.com/YahiaAngelo/qemu-vphone), a fork of [ChefKissInc/QEMUAppleSilicon](https://github.com/ChefKissInc/QEMUAppleSilicon) | **GPL-3.0** overall. The upstream project's own code: **AGPL-3.0**. QEMU's code keeps its original licenses, mostly GPL-2.0-or-later. The files vphone-linux added (`hw/vmapple/vresearch101.c`, `vpiop.c`, `sep-storage.c`, ...) carry `SPDX-License-Identifier: GPL-2.0-or-later` headers. See `qemu/LICENSE` and `qemu/COPYING*`. |
+| KVM backend in the QEMU fork | `qemu/target/arm/apple-virt.c`, `qemu/hw/arm/apple-silicon/virt_patches.c` (from ChefKiss Inferno's KVM backend, with vphone changes); `qemu/accel/accel-private.c` | `apple-virt.c` and `virt_patches.c`: **AGPL-3.0-or-later** (their headers). `accel-private.c`: **GPL-2.0-or-later**, QEMU's terms (its header) |
+| Linux kernel patch | `kvm/linux-aurora-kvm/0001-kvm-arm64-userspace-exits-for-apple-guests.patch`, and the kernel code `kvm/apply-kernel-edits.py` inserts | **GPL-2.0**, Linux's license, as a change to Linux |
+| Kernel package files | `kvm/linux-aurora-kvm/` (`PKGBUILD`, `config`, `configure.sh`, `bindgen-kernel.py`, `validate-config.py`, `rust-toolchain.toml`) | Adapted from Omarchy-M's `linux-aurora` package, which builds on asahi-alarm's `linux-asahi` (see `PKGBUILD`); they keep those packages' terms. `config` is a Linux kernel configuration |
+| KVM test and measurement tools | `kvm/` (everything else: `kvm-exits-test.c`, `hvc-stress*`, `fetchtest/`, the scripts) | **MIT**, like the glue. They use Linux's UAPI headers, which carry the syscall exception (`Linux-syscall-note`) |
 | reims-vgpu fork | `reims-vgpu/` submodule ([YahiaAngelo/reims-vgpu](https://github.com/YahiaAngelo/reims-vgpu)) | **GPL-2.0-or-later OR LGPL-3.0-or-later** (`reims-vgpu/LICENSE`, `LICENSES/`) |
 | metal2vulkan fork | `metal2vulkan/` submodule ([YahiaAngelo/metal2vulkan](https://github.com/YahiaAngelo/metal2vulkan)) | **GPL-2.0-or-later OR LGPL-3.0-or-later** (`metal2vulkan/LICENSE`) |
 | vphone-cli | not included: used on the Mac, or linked from a checkout by `linux-create/sync-sources.sh` | MIT |
@@ -15,6 +19,12 @@ advice; each project's own license files are authoritative.
 
 ## Notes
 
+- **The kernel is built and distributed separately.** `linux-aurora-kvm` is an ordinary GPL-2.0
+  Linux kernel package. QEMU talks to it only through KVM's ioctls and the `kvm_run` area, the
+  userspace interface that the syscall exception covers. The kernel's license therefore does not
+  extend to QEMU, and QEMU's does not extend to the kernel. Anyone who distributes a built package
+  (for example as a release asset) must also offer its source: the pinned `linux-aurora` commit plus
+  this patch.
 - **The QEMU binary combines all three.** QEMU links `libreims_vgpu.a` (which contains metal2vulkan)
   statically. reims-vgpu and metal2vulkan may be used under GPL-2.0-or-later, and therefore under
   GPLv3, so they can be combined with qemu-vphone's GPL-3.0/AGPL-3.0 code. vphone-linux distributes
