@@ -25,6 +25,23 @@ xtool --version
 It is an AppImage. If it does not start, your system lacks FUSE 2: run it with
 `--appimage-extract-and-run`, or install your distribution's `fuse` / `libfuse2` package.
 
+**On an Apple Silicon Mac running Linux** ([KVM.md](KVM.md)) the AppImage above is x86_64 only.
+Install Swift, xtool and the iOS SDK with
+[omarchy-apple-dev](https://github.com/joshuaswarren/omarchy-apple-dev) instead. It builds xtool
+from source for aarch64:
+
+```sh
+git clone https://github.com/joshuaswarren/omarchy-apple-dev && cd omarchy-apple-dev
+XCODE_XIP=/path/to/Xcode_*.xip ./install-toolchain.sh --mode full
+```
+
+It also covers section 2. Its sign-in and device-deploy steps are for physical iPhones; the VM
+doesn't need them. Everything from section 3 on works the same. On an M1 Pro under KVM (Swift
+6.4.2, Xcode 27.2 SDK, 2026-11-25), the sample app built in 8 s, rebuilt in 4 s after an edit,
+and installed and relaunched in about 1 s. If the installer stops on the Python package that
+`swift-bin` asks for (needed by lldb, not by xtool), install it by hand or skip it and run the
+installer again.
+
 ## 2. Install the iOS SDK (once)
 
 xtool builds against the iOS SDK that ships inside Xcode. Download Xcode's `.xip` from
