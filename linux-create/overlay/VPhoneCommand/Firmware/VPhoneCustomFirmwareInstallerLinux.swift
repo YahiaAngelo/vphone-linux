@@ -178,6 +178,8 @@ extension VPhoneCustomFirmwareInstaller {
         let priorGuest = receiptGuest ?? (wasInstalled ? priorFallback : [])
         let device = configuredGuestDevice(in: bundleDirectory) ?? guestDevice(of: restore)
         var liveGuest = Set<String>()
+        // Filled by applyGuestPatches too (patches the guest has nothing for).
+        var notApplicableGuest = Set<String>()
         switch mode {
         case .kernelUpdate:
             return
@@ -196,6 +198,7 @@ extension VPhoneCustomFirmwareInstaller {
                 homePodDisplay: nil,
                 plan: plan,
                 priorGuest: priorGuest,
+                notApplicable: &notApplicableGuest,
                 kernelPatches: receiptKernel,
                 environmentOnly: false,
             )
@@ -218,6 +221,7 @@ extension VPhoneCustomFirmwareInstaller {
                 homePodDisplay: nil,
                 plan: plan,
                 priorGuest: priorGuest,
+                notApplicable: &notApplicableGuest,
                 kernelPatches: receiptKernel,
                 environmentOnly: true,
             )
@@ -245,7 +249,6 @@ extension VPhoneCustomFirmwareInstaller {
             boardDeviceTree: boardDeviceTree,
         ))
 
-        var notApplicableGuest = Set<String>()
         if !device.presentsBoard {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootBoardAudio)
         }
@@ -275,11 +278,15 @@ extension VPhoneCustomFirmwareInstaller {
         }
         notApplicableGuest.subtract(liveGuest)
 
-        try installSignedDaemonCopy(
-            in: bundleDirectory,
-            work: work,
-            owner: invokingUser.map { ($0.uid, $0.gid) },
-        )
+        // As the macOS path: a serial-only research selection can leave vphoned
+        // off, and its host copy exists only after installVphoned staged it.
+        if try work.directory.isRegularFile("vphoned") {
+            try installSignedDaemonCopy(
+                in: bundleDirectory,
+                work: work,
+                owner: invokingUser.map { ($0.uid, $0.gid) },
+            )
+        }
         recordGuestReceipt(
             live: liveGuest,
             notApplicable: notApplicableGuest,

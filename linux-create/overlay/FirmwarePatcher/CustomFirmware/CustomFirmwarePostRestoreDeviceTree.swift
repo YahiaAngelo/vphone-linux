@@ -66,6 +66,51 @@ public enum CustomFirmwarePostRestoreDeviceTree {
 
     // MARK: - File-level patching
 
+    @discardableResult
+    public static func enableVirtualUSBDriverKit(at url: URL, dryRun: Bool = false, verbose: Bool = true) throws -> Outcome {
+        try rewrite(at: url, dryRun: dryRun, verbose: verbose) { blob in
+            let (output, changes, delta) = try withVirtualUSBDriverKit(blob)
+            return (output, changes, blob.count + delta)
+        }
+    }
+
+    public static func withVirtualUSBDriverKit(_ blob: Data) throws -> (Data, [Change], Int) {
+        let root = try parseTree(blob, label: "DT")
+        guard let change = try DeviceTreePatcher.enableVirtualUSBDriverKit(in: root) else { return (blob, [], 0) }
+        let record = Change(property: "product/supports-driverkit", before: change.before?.hex ?? "absent", after: change.after.hex)
+        return (serializeNode(root), [record], change.delta)
+    }
+
+    @discardableResult
+    public static func presentIOS16EphemeralStorage(at url: URL, dryRun: Bool = false) throws -> Outcome {
+        try rewrite(at: url, dryRun: dryRun, verbose: true) { blob in
+            let (result, changes) = try withIOS16EphemeralStorage(blob)
+            return (result, changes, blob.count)
+        }
+    }
+
+    /// Native XNU hw.ephemeral_storage and the corresponding MobileGestalt
+    /// product answer, for an explicitly selected fresh, keybag-less lab.
+    /// Existing slots only: no topology, size, root identity or disk edit.
+    public static func withIOS16EphemeralStorage(_ blob: Data) throws -> (Data, [Change]) {
+        let root = try parseTree(blob, label: "DT")
+        var changes: [Change] = []
+        for (nodeName, propertyName) in [("chosen", "ephemeral-storage"), ("product", "ephemeral-data-mode")] {
+            let nodes = root.children.filter { child in
+                child.properties.contains { $0.name == "name" && String(decoding: $0.value.prefix(while: { $0 != 0 }), as: UTF8.self) == nodeName }
+            }
+            guard nodes.count == 1, let property = nodes.first?.properties.first(where: { $0.name == propertyName }),
+                  (nodeName == "chosen" ? [4] : [4, 8]).contains(property.value.count),
+                  property.value.dropFirst().allSatisfy({ $0 == 0 }), property.value.first.map({ $0 <= 1 }) == true
+            else { throw PatcherError.patchVerificationFailed("iOS 16 ephemeral storage: unknown \(nodeName)/\(propertyName) slot") }
+            if property.value.first == 0 {
+                property.value[0] = 1
+                changes.append(Change(property: "\(nodeName)/\(propertyName)", before: "0", after: "1"))
+            }
+        }
+        return (changes.isEmpty ? blob : serializeNode(root), changes)
+    }
+
     /// Patch a `devicetree.img4` (preferred) or bare `devicetree.im4p` in place.
     @discardableResult
     public static func patch(
@@ -469,6 +514,45 @@ public enum CustomFirmwarePostRestoreDeviceTree {
         return (serializeNode(root), [Change(property: "product/cryptex1-product-class",
                                             before: change.before?.hex ?? "absent", after: change.after.hex)],
                 change.before == nil ? 40 : 0)
+    }
+
+    /// Native 23O247 MobileGestalt table entry 0x90532c43 is virtual (flags=1),
+    /// and wakeboardd maps it to its existing V201HMD/IOMobileFramebuffer path.
+    /// The generic vphone token instead resolves to 0xe474c033, which that
+    /// daemon rejects. Keep the native board name and all hardware properties.
+    public static let visionOSVirtualProductID = Data(base64Encoded: "Z/7NpsIWJyzM76tqwMpW0t8Ep6E=")!
+
+    @discardableResult
+    public static func presentVisionOSVirtualProduct(at url: URL, dryRun: Bool = false, verbose: Bool = true) throws -> Outcome {
+        try rewrite(at: url, dryRun: dryRun, verbose: verbose) { blob in
+            let (newBlob, changes) = try withVisionOSVirtualProduct(blob)
+            return (newBlob, changes, blob.count)
+        }
+    }
+
+    public static func withVisionOSVirtualProduct(_ blob: Data) throws -> (Data, [Change]) {
+        let root = try parseTree(blob, label: "visionOS DT")
+        let models = root.properties.filter { $0.name == "model" }
+        guard models.count == 1, let model = models.first, model.flags == 0,
+              cString(model.value) == "RealityDevice14,1",
+              root.children.filter({ nodeName($0) == "product" }).count == 1,
+              let product = root.children.first(where: { nodeName($0) == "product" }) else {
+            throw PatcherError.invalidFormat("visionOS virtual product requires RealityDevice14,1 and one product node")
+        }
+        let properties = product.properties.filter { $0.name == "product-id" }
+        let generic = Data(base64Encoded: "UT13EFwE1E/xcpFIvIZC6UYOjpc=")!
+        guard properties.count == 1, let value = properties.first, value.flags == 0,
+              value.value == generic || value.value == visionOSVirtualProductID else {
+            throw PatcherError.invalidFormat("visionOS virtual product requires the concrete known VM product token")
+        }
+        guard value.value != visionOSVirtualProductID else { return (blob, []) }
+        let before = value.value
+        value.value = visionOSVirtualProductID
+        let output = serializeNode(root)
+        guard output.count == blob.count else {
+            throw PatcherError.patchVerificationFailed("visionOS virtual product changed device-tree size")
+        }
+        return (output, [Change(property: "product/product-id", before: before.hex, after: value.value.hex)])
     }
 
     /// `blob` without `/product/haptics`, through
