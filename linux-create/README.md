@@ -5,7 +5,7 @@ for Linux, so the VM can be created with no Mac. The steps are in
 [docs/CREATE-ON-LINUX.md](../docs/CREATE-ON-LINUX.md).
 
 vphone-cli's own files are not copied or changed here. `sync-sources.sh` links them from a vphone-cli
-checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.14.2`) into `Sources/`, minus the
+checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.17.1`) into `Sources/`, minus the
 files listed in `excludes/`, plus:
 
 - `Shims/`: Linux stand-ins for Apple modules (Darwin, CryptoKit, Compression, MachO,
@@ -31,7 +31,7 @@ Swift during an invocation. If neither product exists, run `./build.sh --configu
 To run Debug when both products exist, use its `.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli` path.
 
 `VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
-commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).
+commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.17.1`).
 `VPHONE_CLI_PUBLIC` selects the public guest-resource release independently.
 
 The managed source directory is `../cpu-tree/vphone-cli-$VPHONE_CLI_VERSION`. Changing the repository

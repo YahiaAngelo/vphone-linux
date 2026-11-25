@@ -41,10 +41,15 @@ log "Building with Swift $VPHONE_SWIFT_VERSION ($(swift_bin))"
 # binutils crashes in (internal error in format_file_lineno) instead of reporting a link
 # error. -z nostart-stop-gc: with the build's --gc-sections, lld otherwise drops the Swift
 # metadata sections the runtime finds only through __start_/__stop_ symbols, and vphone-cli
-# segfaults at startup (swift_getWitnessTable). Other distros keep the tested default;
-# VPHONE_SWIFT_LLD=1 or 0 overrides.
+# segfaults at startup (swift_getWitnessTable). Also with a binutils snapshot whose `ld -v`
+# is a bare "GNU ld version 2.47.20260726" (Fedora 45, #72): the pinned Swift's build system
+# finds the linker's kind by matching that line with a release suffix ("2.47-1.fc45") and
+# otherwise fails every link step ("Could not parse output of `ld -version_details`");
+# swift-build fixed the match in c121bf52, after Swift 6.4.1. Other distros keep the tested
+# default; VPHONE_SWIFT_LLD=1 or 0 overrides.
 ld_flags=()
-lld=${VPHONE_SWIFT_LLD:-$([ "$(distro_family)" = arch ] && echo 1 || echo 0)}
+bare_gnu_ld() { [[ $(ld -v 2>/dev/null | head -n1) =~ ^GNU\ ld\ version\ [0-9.]+$ ]]; }
+lld=${VPHONE_SWIFT_LLD:-$({ [ "$(distro_family)" = arch ] || bare_gnu_ld; } && echo 1 || echo 0)}
 [ "$lld" = 1 ] && ld_flags=(-Xswiftc -use-ld=lld -Xlinker -z -Xlinker nostart-stop-gc)
 build_args=("$@")
 configuration=release
