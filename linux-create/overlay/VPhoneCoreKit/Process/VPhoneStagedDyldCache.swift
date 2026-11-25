@@ -8,12 +8,23 @@ import Glibc
 /// family-wide transaction: any error must stop the installer before boot.
 public final class VPhoneStagedDyldCache {
     public static let undoName = ".vphone-dsc-undo.json"
+    /// Instruction originals that the JSON undo log keeps in a file beside it.
+    public static let undoWordsName = ".vphone-dsc-undo.words"
     public static let pendingName = ".vphone-dsc-pending.json"
 
     public static func priorGuestPatches(
         wasInstalled: Bool, receipt: Set<String>?, priorFallback: Set<String> = []
     ) -> Set<String> {
         receipt ?? (wasInstalled ? priorFallback : [])
+    }
+
+    static func isUndo(_ name: String) -> Bool { name == undoName || name == undoWordsName }
+
+    /// Cache members, then the undo words, then the JSON log. The cache
+    /// patchers also write the words before the log that depends on them.
+    static func publishesBefore(_ left: String, _ right: String) -> Bool {
+        func rank(_ name: String) -> Int { name == undoName ? 2 : name == undoWordsName ? 1 : 0 }
+        return (rank(left), left) < (rank(right), right)
     }
 
     public struct Failure: Error, CustomStringConvertible {
@@ -394,7 +405,7 @@ public final class VPhoneStagedDyldCache {
         manifest.permissions = [:]
         let names = try familyNames(in: source)
         if let seed {
-            guard !names.contains(Self.undoName), try familyNames(in: seed) == names else {
+            guard !names.contains(where: Self.isUndo), try familyNames(in: seed) == names else {
                 throw Failure("Seed family differs from the fresh guest cache inventory")
             }
         }
@@ -477,7 +488,7 @@ public final class VPhoneStagedDyldCache {
 
     public static func preflightSpace(source: VPhoneConfinedDirectory, mainName: String,
                                       workDirectory: VPhoneConfinedDirectory) throws {
-        let names = try source.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") || $0 == undoName }
+        let names = try source.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") || isUndo($0) }
         guard names.contains(mainName) else { throw Failure("Missing main cache \(mainName)") }
         var bytes: UInt64 = 0
         for name in names {
@@ -503,7 +514,7 @@ public final class VPhoneStagedDyldCache {
     ) throws -> Bool {
         guard try directory.entries().isEmpty else { throw Failure("Seed directory is not empty") }
         let names = try source.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") }.sorted()
-        guard names.contains(mainName), try !source.exists(undoName) else { throw Failure("Source is not a pristine cache seed") }
+        guard names.contains(mainName), try !source.exists(undoName), try !source.exists(undoWordsName) else { throw Failure("Source is not a pristine cache seed") }
         var bytes: UInt64 = 0
         for name in names {
             let file = try source.openRegularFile(name, requireSingleLink: true)
@@ -535,18 +546,18 @@ public final class VPhoneStagedDyldCache {
 
     /// Validate the whole family before the first remote write. Existing
     /// cache inodes are retained, preserving xattrs, ACLs, ownership and flags.
-    /// A new undo file is exclusively created and is always published last.
+    /// New undo files are exclusively created and are always published last.
     public func publish(validateUndo: (URL) throws -> Void, synchronizeGuest: () throws -> Void) throws {
         defer { pending.releasePublicationLock() }
         let names = try familyNames(in: after)
-        guard Set(names).subtracting([Self.undoName]) == Set(manifest.before.keys).subtracting([Self.undoName]) else {
+        guard Set(names).filter({ !Self.isUndo($0) }) == Set(manifest.before.keys).filter({ !Self.isUndo($0) }) else {
             throw Failure("Patcher added or removed cache family members")
         }
         for name in names {
             let file = try after.openRegularFile(name, requireSingleLink: true)
             manifest.after[name] = try fingerprint(file.descriptor, name: name)
             guard fsync(file.descriptor) == 0 else { throw systemError("local patched cache fsync: \(name)") }
-            if name != Self.undoName, manifest.after[name]?.size != manifest.before[name]?.size {
+            if !Self.isUndo(name), manifest.after[name]?.size != manifest.before[name]?.size {
                 throw Failure("Patcher changed cache file size: \(name)")
             }
         }
@@ -566,11 +577,7 @@ public final class VPhoneStagedDyldCache {
             else { throw Failure("Destination changed during local patching: \(name)") }
         }
         let changed = Set(names).union(manifest.before.keys).filter { manifest.after[$0] != manifest.before[$0] }
-            .sorted { left, right in
-                if left == Self.undoName { return false }
-                if right == Self.undoName { return true }
-                return left < right
-            }
+            .sorted(by: Self.publishesBefore)
         if changed.isEmpty {
             try synchronizeGuest()
             manifest.state = "unchanged"
@@ -589,7 +596,7 @@ public final class VPhoneStagedDyldCache {
             manifest.currentFile = name
             try saveManifest()
             if manifest.after[name] == nil {
-                guard name == Self.undoName, let original = identities[name],
+                guard Self.isUndo(name), let original = identities[name],
                       try source.refersTo(name, file: original) else { throw Failure("Undo identity changed before removal") }
                 guard unlinkat(source.descriptor, name, 0) == 0 else { throw systemError(name) }
                 try syncDirectory()
@@ -612,7 +619,7 @@ public final class VPhoneStagedDyldCache {
                 if input.size != original.size, ftruncate(output, input.size) != 0 { throw systemError(name) }
                 guard io.sync(output) == 0 else { throw systemError(name) }
             } else {
-                guard name == Self.undoName else { throw Failure("Unexpected new family member: \(name)") }
+                guard Self.isUndo(name) else { throw Failure("Unexpected new family member: \(name)") }
                 // The atomic exclusive open cannot replace an undo log that
                 // appeared after preflight. A failed fresh write may leave a
                 // partial log: retain both recovery copies and stop before boot.
@@ -641,7 +648,7 @@ public final class VPhoneStagedDyldCache {
     }
 
     private func familyNames(in directory: VPhoneConfinedDirectory) throws -> [String] {
-        try directory.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") || $0 == Self.undoName }.sorted()
+        try directory.entries().filter { $0 == mainName || $0.hasPrefix(mainName + ".") || Self.isUndo($0) }.sorted()
     }
 
     private func copy(_ input: Int32, size: Int64, to directory: VPhoneConfinedDirectory, name: String) throws -> Fingerprint {

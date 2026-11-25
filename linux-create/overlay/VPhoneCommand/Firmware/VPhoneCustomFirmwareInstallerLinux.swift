@@ -152,7 +152,7 @@ extension VPhoneCustomFirmwareInstaller {
         defer { _ = try? tool("/usr/bin/fusermount3", ["-u", system.path], quiet: true) }
         try mountRemote(system, guestPath: connection.system, environment: environment)
         let systemRoot = try work.directory.mountedVolume("system")
-        let relative = "System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
+        let relative = device.dyldSharedCacheDirectory
         let stage = try VPhoneStagedDyldCache.recover(
             bundleDirectory: bundleDirectory, source: systemRoot.directory(relative), guestECID: connection.ecid,
             allowLegacyJournal: allowLegacyJournal, synchronizeGuest: {
@@ -246,6 +246,8 @@ extension VPhoneCustomFirmwareInstaller {
             wasInstalled: wasInstalled, receipt: receiptGuest, priorFallback: priorFallback,
         )
         var liveGuest = Set<String>()
+        // Filled by applyGuestPatches too (patches the guest has nothing for).
+        var notApplicableGuest = Set<String>()
         switch mode {
         case .kernelUpdate:
             return
@@ -264,6 +266,7 @@ extension VPhoneCustomFirmwareInstaller {
                 homePodDisplay: nil,
                 plan: plan,
                 priorGuest: priorGuest,
+                notApplicable: &notApplicableGuest,
                 kernelPatches: receiptKernel,
                 environmentOnly: false,
                 freshDyldSeed: !wasInstalled && receiptGuest == nil && priorGuest.isEmpty,
@@ -287,6 +290,7 @@ extension VPhoneCustomFirmwareInstaller {
                 homePodDisplay: nil,
                 plan: plan,
                 priorGuest: priorGuest,
+                notApplicable: &notApplicableGuest,
                 kernelPatches: receiptKernel,
                 environmentOnly: true,
             )
@@ -314,7 +318,6 @@ extension VPhoneCustomFirmwareInstaller {
             boardDeviceTree: boardDeviceTree,
         ))
 
-        var notApplicableGuest = Set<String>()
         if !device.presentsBoard {
             notApplicableGuest.insert(FirmwareGuestSystemPatchSet.prebootBoardAudio)
         }
@@ -344,11 +347,15 @@ extension VPhoneCustomFirmwareInstaller {
         }
         notApplicableGuest.subtract(liveGuest)
 
-        try installSignedDaemonCopy(
-            in: bundleDirectory,
-            work: work,
-            owner: invokingUser.map { ($0.uid, $0.gid) },
-        )
+        // As the macOS path: a serial-only research selection can leave vphoned
+        // off, and its host copy exists only after installVphoned staged it.
+        if try work.directory.isRegularFile("vphoned") {
+            try installSignedDaemonCopy(
+                in: bundleDirectory,
+                work: work,
+                owner: invokingUser.map { ($0.uid, $0.gid) },
+            )
+        }
         try completion.recordReceipt(in: bundleDirectory, pending: pending, synchronizeGuest: {
             try synchronizeLinuxGuest(mountEnvironment)
         }) {

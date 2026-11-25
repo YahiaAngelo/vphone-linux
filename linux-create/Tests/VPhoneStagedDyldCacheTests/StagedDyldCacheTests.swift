@@ -142,7 +142,10 @@ final class StagedDyldCacheTests: XCTestCase {
         let main = "dyld_shared_cache_arm64e"
     }
 
-    func fixture(undo: Bool = true, seedContents: Data? = nil) throws -> Fixture {
+    /// The name vphone-cli's DyldSharedCacheUndoLog.wordsPath gives the log's words.
+    let undoWords = ".vphone-dsc-undo.words"
+
+    func fixture(undo: Bool = true, words: Data? = nil, seedContents: Data? = nil) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -155,6 +158,7 @@ final class StagedDyldCacheTests: XCTestCase {
         try remote.writeFile("dyld_shared_cache_arm64e", contents: Data("abcdefgh".utf8), mode: 0o640)
         try remote.writeFile("dyld_shared_cache_arm64e.symbols", contents: Data("symbols".utf8), mode: 0o640)
         if undo { try remote.writeFile(VPhoneStagedDyldCache.undoName, contents: Data("old undo".utf8), mode: 0o600) }
+        if let words { try remote.writeFile(undoWords, contents: words, mode: 0o600) }
         let faults = Faults()
         var seed: VPhoneConfinedDirectory?
         if let seedContents {
@@ -820,6 +824,58 @@ final class StagedDyldCacheTests: XCTestCase {
         try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {})
         XCTAssertFalse(try f.remote.exists(VPhoneStagedDyldCache.undoName))
         XCTAssertEqual(try manifest(f).published, [f.main, VPhoneStagedDyldCache.undoName])
+    }
+
+    func testUndoWordsAreStagedAndPublishedBeforeTheLog() throws {
+        for existing in [nil, Data("old words".utf8)] {
+            let f = try fixture(words: existing)
+            let staged = f.stage.afterURL.appendingPathComponent(undoWords)
+            XCTAssertEqual(try? Data(contentsOf: staged), existing)
+            try modify(f)
+            try Data("new and longer words".utf8).write(to: staged)
+            try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {})
+            XCTAssertEqual(try f.remote.readData(undoWords), Data("new and longer words".utf8))
+            XCTAssertEqual(try manifest(f).published, [f.main, undoWords, VPhoneStagedDyldCache.undoName])
+        }
+    }
+
+    func testUnneededUndoWordsAreRemovedFromTheGuest() throws {
+        let f = try fixture(words: Data("old words".utf8))
+        try modify(f)
+        try FileManager.default.removeItem(at: f.stage.afterURL.appendingPathComponent(undoWords))
+        try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: {})
+        XCTAssertFalse(try f.remote.exists(undoWords))
+        XCTAssertEqual(try f.remote.readData(VPhoneStagedDyldCache.undoName), Data("new and longer undo".utf8))
+    }
+
+    func testRecoveryRestoresChangedOrRemovedUndoWordsAndRemovesNewOnes() throws {
+        let old = Data("old words".utf8), new = Data("new and longer words".utf8)
+        for (before, after) in [(nil, new), (old, new), (old, nil)] as [(Data?, Data?)] {
+            let f = try fixture(words: before)
+            let staged = f.stage.afterURL.appendingPathComponent(undoWords)
+            try modify(f)
+            if let after { try after.write(to: staged) } else { try FileManager.default.removeItem(at: staged) }
+            XCTAssertThrowsError(try f.stage.publish(validateUndo: { _ in }, synchronizeGuest: { throw CocoaError(.fileWriteUnknown) }))
+            XCTAssertEqual(try? f.remote.readData(undoWords), after)
+            try recover(f)
+            XCTAssertEqual(try f.remote.exists(undoWords), before != nil)
+            if let before {
+                XCTAssertEqual(try f.remote.readData(undoWords), before)
+                XCTAssertEqual(try f.remote.openRegularFile(undoWords).mode & 0o777, 0o600)
+            }
+            XCTAssertEqual(try f.remote.readData(f.main), Data("abcdefgh".utf8))
+            XCTAssertEqual(try f.remote.readData(VPhoneStagedDyldCache.undoName), Data("old undo".utf8))
+            XCTAssertFalse(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
+        }
+    }
+
+    func testRecoveryRefusesUnrelatedUndoWords() throws {
+        let f = try fixture(words: Data("old words".utf8))
+        try interruptPublication(f)
+        try f.remote.writeFile(undoWords, contents: Data("unrelated".utf8), mode: 0o600)
+        XCTAssertThrowsError(try recover(f))
+        XCTAssertEqual(try f.remote.readData(undoWords), Data("unrelated".utf8))
+        XCTAssertTrue(try f.bundle.exists(VPhoneStagedDyldCache.pendingName))
     }
 
     func testCorruptStagingCopyIsRejectedAndSourceIsUntouched() throws {

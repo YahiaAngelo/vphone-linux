@@ -535,6 +535,19 @@ struct VPhoneCustomFirmwarePatchBoardAudioCommand: ParsableCommand {
 
 // MARK: - patch-dt-homepod-audio-product
 
+struct VPhoneCustomFirmwarePatchVisionOSVirtualProductCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "patch-dt-visionos-virtual-product",
+        abstract: "Select visionOS's native V201 virtual display product",
+    )
+    @Argument(transform: URL.init(fileURLWithPath:)) var deviceTree: URL
+    @Flag(name: .customLong("dry-run")) var dryRun = false
+
+    func run() throws {
+        try CustomFirmwarePostRestoreDeviceTree.presentVisionOSVirtualProduct(at: deviceTree, dryRun: dryRun)
+    }
+}
+
 struct VPhoneCustomFirmwarePatchHomePodCryptexClassCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "patch-dt-homepod-cryptex-class",
@@ -568,6 +581,26 @@ struct VPhoneCustomFirmwarePatchHomePodAudioProductCommand: ParsableCommand {
         try CustomFirmwarePostRestoreDeviceTree.presentHomePodAudioProduct(
             at: deviceTree, board: board, dryRun: dryRun, verbose: true,
         )
+    }
+}
+
+// MARK: - patch-dt-driverkit
+
+struct VPhoneCustomFirmwarePatchDriverKitCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "patch-dt-driverkit",
+        abstract: "Enable DriverKit for a virtual iPhone or iPad USB touchscreen",
+        discussion: "Changes only /product/supports-driverkit to UInt32 1. Requires a virtual iPhone or iPad tree and preserves the IMG4 manifest, restore info and compression.",
+    )
+
+    @Argument(help: "Path to devicetree.img4 or devicetree.im4p", transform: URL.init(fileURLWithPath:))
+    var deviceTree: URL
+
+    @Flag(name: .customLong("dry-run"), help: "Report what would change and exit")
+    var dryRun = false
+
+    func run() throws {
+        try CustomFirmwarePostRestoreDeviceTree.enableVirtualUSBDriverKit(at: deviceTree, dryRun: dryRun)
     }
 }
 
@@ -708,6 +741,16 @@ struct VPhoneCustomFirmwarePatchFoldableDisplaysCommand: ParsableCommand {
         try CustomFirmwarePostRestoreDeviceTree.presentFoldableDisplays(
             at: deviceTree, board: board, dryRun: dryRun, verbose: true)
     }
+}
+
+struct VPhoneCustomFirmwarePatchIOS16EphemeralCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "patch-dt-ios16-ephemeral",
+        abstract: "Declare ephemeral storage for an explicitly selected fresh iOS 16 lab"
+    )
+    @Argument(transform: URL.init(fileURLWithPath:)) var deviceTree: URL
+    @Flag(name: .customLong("dry-run")) var dryRun = false
+    func run() throws { try CustomFirmwarePostRestoreDeviceTree.presentIOS16EphemeralStorage(at: deviceTree, dryRun: dryRun) }
 }
 
 // MARK: - patch-dt-haptics

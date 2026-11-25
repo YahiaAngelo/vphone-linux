@@ -60,13 +60,13 @@ sleep 2
 rm -f "$SOCK"
 (QEMU=${QEMU:-$PWD/qemu/build/qemu-system-aarch64} CID=0 SMP=${SMP:-8} \
   GFX=${GFX:-0} WINDOW=${WINDOW:-0} \
-  DFLAGS=guest_errors LOG=$R/qemu.log timeout 14400 \
+  DFLAGS=guest_errors LOG=$R/qemu.log timeout ${DFU_TIMEOUT:-43200} \
   ./run-vphone.sh --dfu "$VM" -chardev socket,id=vusb,path=$SOCK,server=on,wait=off \
   -global vresearch-vusb.chardev=vusb > "$R/serial.log" 2> "$R/stderr.log" &)
 for _ in $(seq 1 30); do [ -S "$SOCK" ] && break; sleep 1; done
 [ -S "$SOCK" ] || { echo "QEMU did not start; see $R/stderr.log" >&2; exit 1; }
 sleep 20   # AVPBooter reaches DFU
-VUSB_DEBUG=${VUSB_EXPORTER_DEBUG:-} VUSB_URB_TIMEOUT=${VUSB_URB_TIMEOUT:-300} timeout 14400 \
+VUSB_DEBUG=${VUSB_EXPORTER_DEBUG:-} VUSB_URB_TIMEOUT=${VUSB_URB_TIMEOUT:-300} timeout ${DFU_TIMEOUT:-43200} \
   python3 -u "$EXPORTER" "$SOCK" > "$R/usbip.log" 2>&1 &
 exporter_pid=$!
 exporter_started=$(sed 's/^.*) //' "/proc/$exporter_pid/stat" | awk '{print $20}')

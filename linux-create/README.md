@@ -5,7 +5,7 @@ for Linux, so the VM can be created with no Mac. The steps are in
 [docs/CREATE-ON-LINUX.md](../docs/CREATE-ON-LINUX.md).
 
 vphone-cli's own files are not copied or changed here. `sync-sources.sh` links them from a vphone-cli
-checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.14.2`) into `Sources/`, minus the
+checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.17.1`) into `Sources/`, minus the
 files listed in `excludes/`, plus:
 
 - `Shims/`: Linux stand-ins for Apple modules (Darwin, CryptoKit, Compression, MachO,
@@ -31,7 +31,7 @@ Swift during an invocation. If neither product exists, run `./build.sh --configu
 To run Debug when both products exist, use its `.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli` path.
 
 `VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
-commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).
+commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.17.1`).
 `VPHONE_CLI_PUBLIC` selects the public guest-resource release independently.
 
 The managed source directory is `../cpu-tree/vphone-cli-$VPHONE_CLI_VERSION`. Changing the repository
@@ -76,7 +76,7 @@ mount paths, passed as literal arguments. Askpass helpers are private to each ru
 
 This transaction covers iOS and iPadOS cache families. Linux tvOS CFW stops before mounting or changing guest volumes: its standalone `usr/lib/dyld` and cached dyld form a boot-critical pair, and both need one recoverable transaction. Cache-only rollback also refuses plain-arm64 tvOS targets. This does not affect kernel-only updates.
 
-Reserve four times the total size of the selected cache family and its existing undo log plus 1 GiB on the `--work-parent` filesystem. An optional pristine seed needs five times the family size plus 1 GiB. The installer checks this budget before copying the OS cryptex into the guest and again before local cache staging. Firmware images and other CFW work need additional space. If only the optional seed does not fit, the installer uses the guest as its staging source.
+Reserve four times the total size of the selected cache family and its existing undo files plus 1 GiB on the `--work-parent` filesystem. An optional pristine seed needs five times the family size plus 1 GiB. The installer checks this budget before copying the OS cryptex into the guest and again before local cache staging. Firmware images and other CFW work need additional space. If only the optional seed does not fit, the installer uses the guest as its staging source.
 
 Before downloading or restoring firmware, `setup/create-vm.sh` checks the filesystem selected by `VPHONE_CFW_WORK_PARENT` (default `/var/tmp`). It refuses 1 GiB or less free and warns below 25 GiB, the planning estimate for a 6 GiB family. This is an early minimum, not the measured cache budget. Smaller families can need less than 25 GiB. Set `VPHONE_CFW_WORK_PARENT=/path/on/a/larger/filesystem` before creation, or pass `--work-parent` to a direct `cfw` command.
 
@@ -92,7 +92,7 @@ To recover an interrupted publication, stop the failed CFW command and repeat [t
 sudo linux-create/vphone-cli cfw recover-cache -l vms myphone --work-parent /var/tmp
 ```
 
-Recovery checks the selected guest ECID against the publisher's journal before contacting the guest, then checks it again before writes. It also verifies the VM and disk identity, the private recovery copies, and the current cache bytes before restoring the original family. Cache files keep their existing inodes. The original undo log is restored, or a new partial undo log is removed. Guest sync must succeed before the boot fence is removed. A failed recovery keeps the journal and can be retried. A changed ECID, replaced disk, symlink, changed copy, or unrelated guest bytes cause recovery to stop without clearing the fence.
+Recovery checks the selected guest ECID against the publisher's journal before contacting the guest, then checks it again before writes. It also verifies the VM and disk identity, the private recovery copies, and the current cache bytes before restoring the original family. Cache files keep their existing inodes. The original undo files (`.vphone-dsc-undo.json` and `.vphone-dsc-undo.words`) are restored, and new undo files are removed. Guest sync must succeed before the boot fence is removed. A failed recovery keeps the journal and can be retried. A changed ECID, replaced disk, symlink, changed copy, or unrelated guest bytes cause recovery to stop without clearing the fence.
 
 Version 2 journals bind the publisher's normalized ECID and immutable recovery plan, and hold a publisher lock while cache writes or recovery run. A complete journal is synchronized before an atomic, exclusive publication, so a torn journal write cannot strand a boot fence. Version 1 journals predate the lock, ECID binding, and plan digest. Before using `--legacy-journal`, confirm that the original command has exited and the selected bundle still contains that command's original guest ECID. The remaining identity, copy, and guest-byte checks still apply. Keep an unresolved journal in place unless a completed fresh restore has made its recovery plan obsolete, as described below.
 

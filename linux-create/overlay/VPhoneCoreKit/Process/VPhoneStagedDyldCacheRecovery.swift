@@ -54,10 +54,10 @@ extension VPhoneStagedDyldCache {
         let main = mainNames[0]
         let names = Set(manifest.before.keys).union(manifest.after.keys)
         for name in names {
-            guard name == undoName || name == main || (name.hasPrefix(main + ".") && !name.contains("/")),
+            guard isUndo(name) || name == main || (name.hasPrefix(main + ".") && !name.contains("/")),
                   !name.contains("\0") else { throw Failure("Unsafe recovery cache member: \(name)") }
         }
-        guard Set(manifest.before.keys).subtracting([undoName]) == Set(manifest.after.keys).subtracting([undoName]),
+        guard Set(manifest.before.keys).filter({ !isUndo($0) }) == Set(manifest.after.keys).filter({ !isUndo($0) }),
               !manifest.before.isEmpty, !manifest.after.isEmpty else {
             throw Failure("Recovery manifest changes the cache family inventory")
         }
@@ -74,7 +74,7 @@ extension VPhoneStagedDyldCache {
         try verify(URL(fileURLWithPath: before.path), main)
         try verify(URL(fileURLWithPath: after.path), main)
         let inventory = try recoveryNames(in: source, main: main)
-        guard inventory.isSubset(of: names), Set(manifest.before.keys).subtracting([undoName]).isSubset(of: inventory) else {
+        guard inventory.isSubset(of: names), Set(manifest.before.keys).filter({ !isUndo($0) }).isSubset(of: inventory) else {
             throw Failure("Guest cache inventory no longer matches the pending publication")
         }
         var destinations: [String: VPhoneConfinedFile] = [:]
@@ -82,7 +82,7 @@ extension VPhoneStagedDyldCache {
         for name in inventory.sorted() {
             let file = try source.openRegularFile(name, requireSingleLink: true)
             guard file.mode & 0o7000 == 0 else { throw Failure("Guest cache has unexpected special permission bits: \(name)") }
-            if name != undoName, let permissions = manifest.permissions?[name] {
+            if !isUndo(name), let permissions = manifest.permissions?[name] {
                 guard file.owner == permissions.owner, file.group == permissions.group,
                       file.mode & 0o777 == permissions.mode else {
                     throw Failure("Guest cache metadata changed before recovery: \(name)")
@@ -96,7 +96,7 @@ extension VPhoneStagedDyldCache {
         try pending.requireOwnership()
         manifest.state = "rolling-back"
         try saveRecoveryManifest(manifest, in: stage)
-        let ordered = names.sorted { $0 == undoName ? false : $1 == undoName ? true : $0 < $1 }
+        let ordered = names.sorted(by: publishesBefore)
         for name in ordered {
             try pending.requireOwnership()
             if let destination = destinations[name] {
@@ -108,7 +108,7 @@ extension VPhoneStagedDyldCache {
                 throw Failure("Guest cache member appeared during recovery: \(name)")
             }
             if let expected = manifest.before[name], observed[name] == expected {
-                if name != undoName { continue }
+                if !isUndo(name) { continue }
                 if let permissions = manifest.permissions?[name], let destination = destinations[name],
                    destination.owner == permissions.owner, destination.group == permissions.group,
                    destination.mode & 0o777 == permissions.mode {
@@ -117,7 +117,7 @@ extension VPhoneStagedDyldCache {
             }
             guard let original = savedBefore[name] else {
                 if let destination = destinations[name] {
-                    guard name == undoName, try source.refersTo(name, file: destination),
+                    guard isUndo(name), try source.refersTo(name, file: destination),
                           unlinkat(source.descriptor, name, 0) == 0 else {
                         throw Failure("Could not remove the pending publication's new undo log")
                     }
@@ -136,13 +136,13 @@ extension VPhoneStagedDyldCache {
                     throw Failure("Guest cache identity changed before recovery write: \(name)")
                 }
             } else {
-                guard name == undoName else { throw Failure("A cache inode is missing during recovery: \(name)") }
+                guard isUndo(name) else { throw Failure("A cache inode is missing during recovery: \(name)") }
                 output = io.create(source.descriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
                 guard output >= 0 else { throw Failure("Could not recreate the original undo log exclusively") }
             }
             defer { close(output) }
             try restoreRecoveryFile(original, to: output, name: name, io: io)
-            if name == undoName {
+            if isUndo(name) {
                 let directory = try source.metadata()
                 let permissions = manifest.permissions?[name]
                     ?? destinations[name].map { Permissions(owner: $0.owner, group: $0.group, mode: $0.mode & 0o777) }
@@ -194,7 +194,7 @@ extension VPhoneStagedDyldCache {
     }
 
     private static func recoveryNames(in source: VPhoneConfinedDirectory, main: String) throws -> Set<String> {
-        Set(try source.entries().filter { $0 == main || $0.hasPrefix(main + ".") || $0 == undoName })
+        Set(try source.entries().filter { $0 == main || $0.hasPrefix(main + ".") || isUndo($0) })
     }
 
     /// A torn write may contain either staged byte at each offset. Anything
@@ -203,10 +203,10 @@ extension VPhoneStagedDyldCache {
                                         rollingBack: Bool, name: String, io: IO) throws -> Fingerprint {
         let maximum = max(before?.size ?? 0, after?.size ?? 0)
         guard file.size >= 0, file.size <= maximum,
-              name == undoName || (file.size == before?.size && before?.size == after?.size) else {
+              isUndo(name) || (file.size == before?.size && before?.size == after?.size) else {
             throw Failure("Guest cache size cannot be explained by the pending write: \(name)")
         }
-        if name == undoName, let before {
+        if isUndo(name), let before {
             if let after {
                 guard file.size >= min(before.size, after.size) else {
                     throw Failure("Existing undo log was truncated outside the pending write")
