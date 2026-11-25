@@ -1,6 +1,7 @@
 // vphone-linux placeholder for vphone-cli's VPhonePCCGPURecovery, which restores cloudOS in a
 // temporary Virtualization.framework VM to extract its GPU driver. On Linux that restore will run
-// in QEMU (vphone-linux's vresearch101 machine); until then, pass --gpu-driver-bundle.
+// in QEMU (vphone-linux's vresearch101 machine); until then, pass --gpu-driver-bundle. The same
+// restore supplies cryptexctl for a trusted darwinOS guest (gpuDriver: false), also unavailable.
 import Foundation
 
 enum VPhonePCCGPURecovery {
@@ -11,7 +12,12 @@ enum VPhonePCCGPURecovery {
         }
     }
 
-    static func stage(cloudOSDirectory: URL, into restoreDirectory: URL, expectedPlatformVersion: String) throws {
+    static func stage(
+        cloudOSDirectory: URL,
+        into restoreDirectory: URL,
+        expectedPlatformVersion: String,
+        gpuDriver: Bool = true,
+    ) throws {
         throw Unsupported()
     }
 }

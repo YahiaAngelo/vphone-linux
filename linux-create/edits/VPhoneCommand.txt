@@ -1,8 +1,7 @@
 # Linux URLResourceValues has no volumeAvailableCapacityForImportantUsage; use the volume's available capacity.
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/resourceValues\(forKeys: \[\.volumeAvailableCapacityForImportantUsageKey\]\)/resourceValues(forKeys: [.volumeAvailableCapacityKey])/
 Firmware/VPhoneCustomFirmwareInstaller.swift	s/\.volumeAvailableCapacityForImportantUsage \?\? 0/.volumeAvailableCapacity.map(Int64.init) ?? 0/
-# fw aea-decrypt (overlay Firmware/VPhoneFirmwareAEADecryptCommand.swift): aea decrypt on Linux.
-Firmware/VPhoneFirmwareCommand.swift	s/^( *)VPhoneFirmwareAEAKeyCommand\.self,$/\1VPhoneFirmwareAEAKeyCommand.self,\n\1VPhoneFirmwareAEADecryptCommand.self,/
+# fw aea-decrypt: overlay Firmware/VPhoneFirmwareAEADecryptCommand.swift, registered in the VPhoneFirmwareCommand overlay.
 Firmware/VPhoneFirmwareCommand.swift	s#/private/var/tmp#/var/tmp#
 Firmware/VPhoneCustomFirmwareInstaller.swift	s#/private/var/tmp#/var/tmp#
 Firmware/VPhoneCustomFirmwareInstaller.swift	s#/usr/sbin/lsof#/usr/bin/lsof#g

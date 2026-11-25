@@ -5,7 +5,7 @@ for Linux, so the VM can be created with no Mac. The steps are in
 [docs/CREATE-ON-LINUX.md](../docs/CREATE-ON-LINUX.md).
 
 vphone-cli's own files are not copied or changed here. `sync-sources.sh` links them from a vphone-cli
-checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.14.2`) into `Sources/`, minus the
+checkout (`VPHONE_CLI`, default `../vphone-cli`; tested with tag `2.17.1`) into `Sources/`, minus the
 files listed in `excludes/`, plus:
 
 - `Shims/`: Linux stand-ins for Apple modules (Darwin, CryptoKit, Compression, MachO,
@@ -31,7 +31,7 @@ Swift during an invocation. If neither product exists, run `./build.sh --configu
 To run Debug when both products exist, use its `.build/out/out/Products/Debug-linux-$(uname -m)/vphone-cli` path.
 
 `VPHONE_CLI_REPO` selects the source repository and `VPHONE_CLI_REF` selects its tag, branch or full
-commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.14.2`).
+commit. They default to the upstream repository and `VPHONE_CLI_VERSION` (`2.17.1`).
 `VPHONE_CLI_PUBLIC` selects the public guest-resource release independently.
 
 The managed source directory is `../cpu-tree/vphone-cli-$VPHONE_CLI_VERSION`. Changing the repository
@@ -86,13 +86,11 @@ stub; the production wrapper keeps `/usr/bin/ssh`. The connection check also pas
 connector path through the real FUSE option parser and OpenSSH to a local stub that exits
 without network or USB access. These checks do not create mounts or verify a guest installation.
 
-The DriverKit adapter and native restore-TXM admission use CLI `2.16.1`
-(`d1c36fa89e09edab046482b6e88241f1f7288099`), including its shared DriverKit/TXM APIs,
-CoreFoundation imports, optimized-build repair, and missing-profile compatibility. The extra
-TXM site follows the restore kernel's resolved AMFI trust-cache policy; disabled profile waivers
-remain disabled, and incomplete native admission is refused before writing. The Linux
-CoreFoundation shim repair must accompany this source. The default source and public
-guest-resource pins stay unchanged pending iOS 18 restore-TXM and native validation.
+Native restore-TXM admission uses the shared signature-classification and missing-profile matchers
+of the pinned CLI (`2.17.1`). The extra TXM site follows the restore kernel's resolved AMFI
+trust-cache policy; disabled profile waivers remain disabled, and incomplete native admission is
+refused before writing. The CLI's opt-in `txm-exp-precheck_admission` patch is for the guest's TXM:
+the restore-TXM helper does not apply it. iOS 18 restore-TXM and native validation are still pending.
 
 The release-TXM regression uses a private, pristine `txm.iphoneos.release.im4p` from TXM
 `187.100.3`. Only its identity metadata is tracked. With Swift 6.4.1 and synchronized sources:
