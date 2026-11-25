@@ -148,9 +148,6 @@ export VPHONE_XPAGE_LINKS=${VPHONE_XPAGE_LINKS:-1}
 # The return's lookup (helper_vphone_lookup_fast) otherwise stalls on that entry's cache miss
 # (38% of its time); inline, QEMU's share of vCPU time fell from 47.8% to 44.6%.
 export VPHONE_RET_PREFETCH=${VPHONE_RET_PREFETCH:-2}
-# Read CNTVCT_EL0/CNTPCT_EL0 without taking the BQL when supported by QEMU
-# (qemu target/arm/tcg/translate-a64.c, VPHONE_FAST_CNT). 0 restores the BQL path.
-export VPHONE_FAST_CNT=${VPHONE_FAST_CNT:-1}
 # Broadcast TLB flushes (XNU's TLBI ...IS, thousands a second) as a barrier: every vCPU flushes its
 # own TLB and the source waits for them, falling back on QEMU's exclusive section (which stops
 # every vCPU) only when one is late (qemu accel/tcg/cputlb.c, QEMU_TLB_UNSYNCED). 0 restores the
@@ -252,6 +249,9 @@ if [ -z "${VPHONE_CPUS+x}" ]; then
   fi
 fi
 if [ -n "${VPHONE_CPUS:-}" ]; then
-  exec taskset -c "$VPHONE_CPUS" "$QEMU" -M "$machine" "${args[@]}" "$@"
+  if command -v taskset >/dev/null 2>&1 && taskset -c "$VPHONE_CPUS" true >/dev/null 2>&1; then
+    exec taskset -c "$VPHONE_CPUS" "$QEMU" -M "$machine" "${args[@]}" "$@"
+  fi
+  echo "run-vphone.sh: warning: cannot pin to VPHONE_CPUS=$VPHONE_CPUS, running unpinned" >&2
 fi
 exec "$QEMU" -M "$machine" "${args[@]}" "$@"

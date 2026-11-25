@@ -196,43 +196,43 @@ do_phase sources && {
 }
 
 # --------------------------------------------------------------- 3. build ---
-VPHONE_DEBUG_BUILD=${VPHONE_DEBUG_BUILD:-0}
+VPHONE_NATIVE_OPT=${VPHONE_NATIVE_OPT:-0}
+VPHONE_LTO=${VPHONE_LTO:-0}
+VPHONE_NDEBUG=${VPHONE_NDEBUG:-0}
 
-qemu_release_args() {
-  [ "$VPHONE_DEBUG_BUILD" = 0 ] || return 0
-  local cc=${CC:-cc}
-  local cflags="-O3 -march=native -DNDEBUG -DG_DISABLE_ASSERT"
-  local flag
-  for flag in -fno-zero-call-used-regs -fzero-call-used-regs=skip; do
-    if printf 'int x;\n' | "$cc" -x c "$flag" -c - -o /dev/null 2>/dev/null; then
-      cflags+=" $flag"
-      break
-    fi
-  done
-  if printf 'int x;\n' | "$cc" -x c -ftrivial-auto-var-init=uninitialized -c - -o /dev/null 2>/dev/null; then
-    cflags+=" -ftrivial-auto-var-init=uninitialized"
+qemu_flags_stamp() {
+  local native=0 lto=0 ndebug=0
+  if [ "$VPHONE_NATIVE_OPT" = 1 ]; then native=1; fi
+  if [ "$VPHONE_LTO" = 1 ]; then lto=1; fi
+  if [ "$VPHONE_NDEBUG" = 1 ]; then ndebug=1; fi
+  printf 'native=%s lto=%s ndebug=%s\n' "$native" "$lto" "$ndebug"
+}
+
+qemu_opt_args() {
+  local opts=()
+  local cflags=""
+  if [ "$VPHONE_LTO" = 1 ]; then
+    opts+=(--enable-lto)
   fi
-  local opts=(--disable-debug-info --enable-lto --disable-stack-protector)
-  if [ "$(uname -m)" = x86_64 ] && [ -r /proc/cpuinfo ]; then
-    local cpu_flags
-    cpu_flags=$(grep -m1 '^flags' /proc/cpuinfo || true)
-    if [[ " $cpu_flags " == *" avx512f "* ]] &&
-       [[ " $cpu_flags " == *" avx512bw "* ]] &&
-       [[ " $cpu_flags " == *" avx512cd "* ]] &&
-       [[ " $cpu_flags " == *" avx512dq "* ]] &&
-       [[ " $cpu_flags " == *" avx512vl "* ]]; then
-      opts+=(--x86-version=4)
-    fi
+  if [ "$VPHONE_NATIVE_OPT" = 1 ]; then
+    cflags="${cflags:+${cflags} }-O3 -march=native"
   fi
-  opts+=("--extra-cflags=$cflags")
-  printf '%s\0' "${opts[@]}"
+  if [ "$VPHONE_NDEBUG" = 1 ]; then
+    cflags="${cflags:+${cflags} }-DNDEBUG -DG_DISABLE_ASSERT"
+  fi
+  if [ -n "$cflags" ]; then
+    opts+=("--extra-cflags=$cflags")
+  fi
+  if [ ${#opts[@]} -gt 0 ]; then
+    printf '%s\0' "${opts[@]}"
+  fi
 }
 
 build_reims() {
   # Always: cargo rebuilds only what changed, and a submodule update must reach the library
   # (QEMU is relinked below when the library is newer than it).
   log " Building reims-vgpu (the first build is long: its static lib is ~800 MB)"
-  if [ "$VPHONE_DEBUG_BUILD" = 0 ] && [[ " ${RUSTFLAGS:-} " != *"target-cpu="* ]]; then
+  if [ "$VPHONE_NATIVE_OPT" = 1 ] && [[ " ${RUSTFLAGS:-} " != *"target-cpu="* ]]; then
     RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native" make -C "$VSETUP_SRC/reims-vgpu"
   else
     make -C "$VSETUP_SRC/reims-vgpu"
@@ -242,18 +242,32 @@ build_qemu() {
   # Always: ninja rebuilds only what changed, so an update of the qemu submodule (or a newer
   # reims-vgpu library, which QEMU links statically) reaches the binary.
   local pkgcfg="$VSETUP_SRC/reims-vgpu/target/dist-vulkan/lib/pkgconfig"
+  local build_dir="$VSETUP_SRC/qemu/build"
+  local stamp_file="$build_dir/.vphone-build-flags"
+  local want_stamp have_stamp=""
   local qemu_extra=() opt
+  want_stamp=$(qemu_flags_stamp)
+  if [ -f "$stamp_file" ]; then
+    have_stamp=$(cat "$stamp_file")
+  fi
   while IFS= read -r -d '' opt; do
     qemu_extra+=("$opt")
-  done < <(qemu_release_args)
+  done < <(qemu_opt_args)
   log " Building QEMU (-M vresearch101) against reims-vgpu"
-  mkdir -p "$VSETUP_SRC/qemu/build"
+  mkdir -p "$build_dir"
   ( export PKG_CONFIG_PATH=$pkgcfg
-    cd "$VSETUP_SRC/qemu/build"
-    [ -f config.status ] || ../configure --target-list=aarch64-softmmu --enable-pvg \
-      --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
-      --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug \
-      "${qemu_extra[@]}"
+    cd "$build_dir"
+    if [ ! -f config.status ] || [ ! -f build.ninja ] || [ "$have_stamp" != "$want_stamp" ]; then
+      if [ -f config.status ] || [ -f build.ninja ]; then
+        log " Reconfiguring QEMU (build flags changed: ${have_stamp:-<none>} -> $want_stamp)"
+      fi
+      rm -f .vphone-build-flags
+      ../configure --target-list=aarch64-softmmu --enable-pvg \
+        --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
+        --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug \
+        "${qemu_extra[@]}"
+      printf '%s\n' "$want_stamp" > .vphone-build-flags
+    fi
     ninja qemu-system-aarch64 )
 }
 build_creator() {
