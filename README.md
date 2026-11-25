@@ -156,12 +156,16 @@ vphone list
 The launcher resolves symlinks, so the link picks up this checkout's `setup/start-vm.sh`. If
 `~/.local/bin` is not on your `PATH`, `install` warns you instead of failing.
 
-`./vphone` is a thin wrapper around `setup/start-vm.sh`: it discovers VMs, forwards its environment,
-and keeps the same window and unlock behaviour. Run `./vphone help` for all commands. For direct
-control, including service profiles, the underlying script still works:
+`./vphone` is a thin wrapper around `setup/start-vm.sh`: it discovers completed VMs, forwards its
+environment and start options (`--no-window`, `--cid N`, `--trim`, `--untrim`), and keeps the same
+window and unlock behaviour. Run `./vphone help` for all commands. Auto-selection sees a VM once
+`create-vm.sh` has written its final `booted` step; a half-created VM can still be started by name.
+With several VMs, `./vphone start` leaves the choice to `start-vm.sh`'s menu (needs a terminal),
+while the other commands need a name or `VPHONE_VM`:
 
 ```sh
-./setup/start-vm.sh --trim   # Reduce background services and resource use
+./vphone --trim              # Reduce background services and resource use
+./vphone --cid 4 my-vm       # Override the recorded vsock CID
 ```
 
 `--trim` (also available on `create-vm.sh`) applies vphoned's `trimmed` service profile: Siri and

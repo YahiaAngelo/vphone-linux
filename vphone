@@ -3,9 +3,10 @@
 #
 # One command boots an existing VM in its window and unlocks iOS:
 #
-#   ./vphone                     # the only VM, or the one in $VPHONE_VM
+#   ./vphone                     # the only completed VM, or the one in $VPHONE_VM
 #   ./vphone start NAME          # a specific VM (name or path)
 #   ./vphone start --fast NAME   # return as soon as QEMU is up, skip the unlock wait
+#   ./vphone --cid N NAME        # start-vm.sh options pass through
 #   ./vphone stop [NAME]
 #   ./vphone status [NAME]
 #   ./vphone list
@@ -13,9 +14,9 @@
 #   ./vphone install         # symlink into ~/.local/bin, so 'vphone' works anywhere
 #
 # This is a thin wrapper around setup/start-vm.sh; its environment knobs (MEM,
-# SMP, TOOLBAR, ...) still apply. The vsock CID comes from the VM's "cid" file.
-# It only adds VM discovery and a short command vocabulary. Nothing here
-# creates or modifies a VM.
+# SMP, TOOLBAR, ...) and options (--cid, --no-window, --trim, ...) still apply.
+# The vsock CID comes from the VM's "cid" file. It only adds VM discovery and a
+# short command vocabulary. Nothing here creates or modifies a VM.
 set -Eeuo pipefail
 
 # Resolve symlinks so a link in ~/.local/bin still finds this checkout's setup scripts.
@@ -28,7 +29,15 @@ done
 ROOT=$(cd -P "$(dirname "$SOURCE")" && pwd)
 # Test hook only: setup/test/vphone-cli.sh points this at a stub launcher.
 START=${VPHONE_START:-$ROOT/setup/start-vm.sh}
+# start-vm.sh passes an absolute VM path to QEMU; the running-state check has to
+# compare against the same path, even when VSETUP_DEVICES was given relative.
 DEVICES=${VSETUP_DEVICES:-$HOME/vphone-setup-work/devices}
+[ "$DEVICES" = / ] || DEVICES=${DEVICES%/}
+if [ -d "$DEVICES" ]; then
+  DEVICES=$(cd "$DEVICES" && pwd)
+elif [[ $DEVICES != /* ]]; then
+  DEVICES=$PWD/$DEVICES
+fi
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN\033[0m %s\n' "$*" >&2; }
@@ -49,14 +58,18 @@ Commands:
 
 Options for start:
   --fast              Return as soon as QEMU is up; do not wait to unlock
+  --no-window, --cid N, --trim, --untrim, --no-unlock
+                      Passed through to setup/start-vm.sh (--cid takes a value)
   -h, --help          Show this help
 
 VM selection:
-  Omit VM when there is only one, or set VPHONE_VM to its name/path.
-  With several VMs, pass a name: there is no interactive menu.
+  Omit VM when there is only one completed VM, or set VPHONE_VM to its name/path.
+  With several completed VMs, 'start' leaves the choice to start-vm.sh's menu
+  (needs a terminal); other commands need a name or VPHONE_VM.
   Names are directories under $VSETUP_DEVICES (default ~/vphone-setup-work/devices).
-  Unlike 'start-vm.sh --list', any directory with a Disk.img is listed, including
-  VMs that were booted directly with run-vphone.sh and have no "booted" marker.
+  Auto-selection only sees VMs whose .create-state has "booted", as in
+  'start-vm.sh --list'. An explicit name or path works without that marker, e.g.
+  to finish a VM that create-vm.sh has not booted yet.
   Environment knobs such as MEM=6G SMP=6 vphone and TOOLBAR=0 vphone pass through.
   The vsock CID comes from the VM's "cid" file; set it at creation time with
   CID=4 ./setup/create-vm.sh.
@@ -65,17 +78,22 @@ Examples:
   ./vphone
   ./vphone --fast                 # same as: ./vphone start --fast
   ./vphone start --fast my-vm
+  ./vphone --cid 4 my-vm
+  ./vphone start --trim my-vm
   ./vphone list
   ./vphone logs
   ./vphone install            # use 'vphone' from any directory
 EOF
 }
 
+# Completed VMs, as start-vm.sh defines them: a Disk.img and the final "booted"
+# step recorded by create-vm.sh. Half-created folders are not auto-selected.
 vm_dirs() {
   local d
   for d in "$DEVICES"/*/; do
     [ -d "$d" ] || continue
     [ -e "$d/Disk.img" ] || continue
+    grep -qxs booted "$d/.create-state" || continue
     printf '%s\n' "${d%/}"
   done
 }
@@ -88,7 +106,7 @@ resolve_vm() {
       return 0
     fi
     if [ -e "$DEVICES/$arg/Disk.img" ]; then
-      printf '%s\n' "$DEVICES/$arg"
+      printf '%s\n' "$(cd "$DEVICES/$arg" && pwd)"
       return 0
     fi
     die "no VM at '$arg' (see 'vphone list')"
@@ -100,7 +118,7 @@ resolve_vm() {
       return 0
     fi
     if [ -e "$DEVICES/$VPHONE_VM/Disk.img" ]; then
-      printf '%s\n' "$DEVICES/$VPHONE_VM"
+      printf '%s\n' "$(cd "$DEVICES/$VPHONE_VM" && pwd)"
       return 0
     fi
     die "VPHONE_VM points to no VM: $VPHONE_VM (see 'vphone list')"
@@ -109,7 +127,7 @@ resolve_vm() {
   local found=()
   mapfile -t found < <(vm_dirs)
   case ${#found[@]} in
-    0) die "no VMs in $DEVICES yet: make one with ./setup/create-vm.sh" ;;
+    0) die "no completed VMs in $DEVICES yet: make one with ./setup/create-vm.sh" ;;
     1) printf '%s\n' "${found[0]}" ;;
     *) die "several VMs in $DEVICES: pass a name or set VPHONE_VM (see 'vphone list')" ;;
   esac
@@ -128,23 +146,41 @@ qemu_pid() {
 cid_of() { cat "$1/cid" 2>/dev/null || printf '3\n'; }
 
 cmd_start() {
-  local fast=0 name=''
+  local fast=0 name='' vm
+  local -a forwarded=()
   while [ $# -gt 0 ]; do
     case $1 in
       --fast) fast=1 ;;
       -h|--help) usage; exit 0 ;;
-      -*) die "unknown option $1 (see 'vphone help')" ;;
+      --cid)
+        forwarded+=("$1")
+        shift
+        [ $# -gt 0 ] || die "--cid needs a value (see 'vphone help')"
+        forwarded+=("$1")
+        ;;
+      -*) forwarded+=("$1") ;;
       *) [ -z "$name" ] || die "too many VM arguments (see 'vphone help')"; name=$1 ;;
     esac
     shift
   done
 
-  local vm args=()
-  vm=$(resolve_vm "$name")
   [ -x "$START" ] || die "missing $START: run ./setup/setup.sh first"
-  [ "$fast" = 0 ] || args+=(--no-unlock)
+  [ "$fast" = 0 ] || forwarded+=(--no-unlock)
+
+  # With no explicit VM, start-vm.sh's own menu handles the multi-VM case; it
+  # knows about the terminal and keeps its selection behaviour in one place.
+  if [ -z "$name" ] && [ -z "${VPHONE_VM:-}" ]; then
+    local found=()
+    mapfile -t found < <(vm_dirs)
+    if [ ${#found[@]} -gt 1 ]; then
+      log "several VMs; letting start-vm.sh ask which one"
+      exec "$START" "${forwarded[@]}"
+    fi
+  fi
+
+  vm=$(resolve_vm "$name")
   log "booting $(basename "$vm")"
-  exec "$START" "${args[@]}" "$vm"
+  exec "$START" "${forwarded[@]}" "$vm"
 }
 
 cmd_stop() {
@@ -187,28 +223,48 @@ cmd_logs() {
 
 cmd_install() {
   [ $# -eq 0 ] || die "usage: vphone install"
-  local bin_dir=${VPHONE_BIN_DIR:-$HOME/.local/bin} target
+  local bin_dir=${VPHONE_BIN_DIR:-$HOME/.local/bin} target path_dir entry on_path=0
+  local -a entries=()
   mkdir -p "$bin_dir"
   target=$bin_dir/vphone
   if [ -e "$target" ] && [ ! -L "$target" ]; then
     die "$target exists and is not a symlink; remove it first"
   fi
+  if [ -L "$target" ]; then
+    local old
+    old=$(readlink "$target")
+    [ "$old" = "$ROOT/vphone" ] || log "replacing $target (was -> $old)"
+  fi
   ln -sfn "$ROOT/vphone" "$target"
   log "linked $target -> $ROOT/vphone"
-  case ":$PATH:" in
-    *":$bin_dir:"*) ;;
-    *) warn "$bin_dir is not on PATH; add it to use 'vphone' from any directory" ;;
-  esac
+
+  # Compare entries without trailing slashes: both PATH and VPHONE_BIN_DIR may
+  # have one (e.g. ~/.local/bin/), and neither spelling should warn.
+  path_dir=${bin_dir%/}; [ -n "$path_dir" ] || path_dir=/
+  IFS=: read -ra entries <<< "$PATH"
+  for entry in "${entries[@]}"; do
+    entry=${entry%/}; [ -n "$entry" ] || entry=/
+    if [ "$entry" = "$path_dir" ]; then on_path=1; break; fi
+  done
+  [ "$on_path" = 1 ] || warn "$bin_dir is not on PATH; add it to use 'vphone' from any directory"
 }
 
 case ${1:-} in
   ''|start|boot) shift || true; cmd_start "$@" ;;
-  --fast)        cmd_start "$@" ;;  # cmd_start sees the flag; no shift
   stop)          shift; cmd_stop "$@" ;;
   status|ps)     shift; cmd_status "$@" ;;
   list|ls)       shift; cmd_list "$@" ;;
   logs|log)      shift; cmd_logs "$@" ;;
   install)       shift; cmd_install "$@" ;;
   help|-h|--help) usage ;;
-  *)             die "unknown command '$1' (see 'vphone help')" ;;
+  # All other options belong to start-vm.sh (--fast is handled in cmd_start).
+  -*)            cmd_start "$@" ;;
+  # ./vphone NAME is shorthand for ./vphone start NAME.
+  *)
+    if [ $# -gt 0 ] && vm=$(resolve_vm "$1" 2>/dev/null); then
+      shift
+      cmd_start "$vm" "$@"
+    fi
+    die "unknown command '$1' (see 'vphone help')"
+    ;;
 esac

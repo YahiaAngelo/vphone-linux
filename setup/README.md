@@ -15,8 +15,9 @@ in its own directory.
 
 # later — start a VM create-vm.sh made (window + unlock), and stop it
 ./vphone install                    # optional: use 'vphone' from any directory
-./vphone                            # the only VM, or VPHONE_VM=NAME; see ./vphone help
+./vphone                            # the only completed VM, or VPHONE_VM=NAME; see ./vphone help
 ./vphone --fast                     # return as soon as QEMU is up, without the unlock wait
+./vphone --trim                     # pass start-vm.sh options through (also --cid N, --no-window)
 ./vphone stop
 ./vphone list
 

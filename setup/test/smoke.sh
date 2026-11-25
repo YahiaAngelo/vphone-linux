@@ -8,12 +8,13 @@ source "$(pwd)/lib/common.sh"
 
 status=0
 bash test/linux-create-release-cli.sh || status=1
-for f in $(find "$VSETUP_ROOT" -name '*.sh' -type f | sort); do
+VPHONE=$VSETUP_ROOT/../vphone
+for f in $(find "$VSETUP_ROOT" -name '*.sh' -type f | sort) "$VPHONE"; do
   bash -n "$f" || { echo "FAIL bash -n $f"; status=1; }
 done
 if command -v shellcheck >/dev/null; then
   # shellcheck disable=SC2046  # the filenames have no spaces in this checkout
-  shellcheck -x --severity=style $(find "$VSETUP_ROOT" -name '*.sh' -type f) || status=1
+  shellcheck -x --severity=style $(find "$VSETUP_ROOT" -name '*.sh' -type f) "$VPHONE" || status=1
 fi
 python3 "$VSETUP_ROOT/lib/json_query.py" validate || status=1
 bash "$VSETUP_ROOT/test/display-density.sh" || status=1
