@@ -41,6 +41,12 @@ for t in "${!SRC[@]}"; do
       rm -f "$g" && mv "$g.tmp" "$g"
     done < "edits/$t.txt"
   fi
+  # Foundation re-exports CoreFoundation's CF*GetTypeID on Linux, so in a file that imports both the
+  # bare name is ambiguous: qualify it.
+  { grep -RlE '^import CoreFoundation' "Sources/$t" --include='*.swift' || true; } | while read -r f; do
+    grep -qE '(^|[^.A-Za-z_])CF(Boolean)?GetTypeID\(' "$f" || continue
+    sed -E 's/(^|[^.A-Za-z_])CF(Boolean)?GetTypeID\(/\1CoreFoundation.CF\2GetTypeID(/g' "$f" > "$f.tmp" && rm -f "$f" && mv "$f.tmp" "$f"
+  done
   # Module-qualified libc calls (Darwin.write) are Glibc.write on Linux.
   { grep -RlE '\bDarwin\.[a-z]' "Sources/$t" --include='*.swift' || true; } | while read -r f; do
     sed -E 's/\bDarwin\.([a-z])/Glibc.\1/g' "$f" > "$f.tmp" && rm -f "$f" && mv "$f.tmp" "$f"

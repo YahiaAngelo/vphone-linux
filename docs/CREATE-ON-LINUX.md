@@ -320,6 +320,17 @@ and unmount them with `fusermount3 -u` before retrying.
 
 ## 6. Finish and first boot
 
+Callers of `setup/create-vm.sh` can set `VPHONE_FIRST_BOOT_CHECK` to an absolute
+path to an executable regular file. Setup validates the path before preparing a
+VM. On first boot, after `data_migration_done` becomes true, it runs that file
+with the VM directory and VSOCK CID as its two arguments. The check runs as the
+invoking user and inherits the setup environment; it must enforce its own time
+limit. A nonzero exit stops creation before Setup Assistant is skipped, the
+screen is unlocked, or Auto-Lock, display scale, and the service profile change.
+The guest stays running for inspection, and the `booted` step is not recorded.
+Rerunning the incomplete step runs the check again. An unset or empty value
+preserves the default flow; a dry run prints the check without executing it.
+
 1. Unmount the guest volumes from the ramdisk so nothing is lost, then stop the VM:
 
    ```sh
