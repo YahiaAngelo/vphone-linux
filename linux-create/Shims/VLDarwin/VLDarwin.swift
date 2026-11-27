@@ -288,15 +288,6 @@ public func copyfile(_ from: UnsafePointer<CChar>, _ to: UnsafePointer<CChar>, _
     }
 }
 
-// CoreFoundation type IDs, for the one use vphone-cli has: "is this NSNumber a boolean". Linux
-// Foundation's booleans are NSNumbers whose objCType is "B" or "c" (property lists decode
-// integers as "q", so a Bool is not confused with a one-byte integer there).
-public func CFBooleanGetTypeID() -> UInt { 1 }
-public func CFGetTypeID(_ number: NSNumber) -> UInt {
-    let type = String(cString: number.objCType)
-    return type == "B" || type == "c" ? CFBooleanGetTypeID() : 2
-}
-
 // macOS renameatx_np(2). vphone-cli 2.12 swaps two paths atomically to publish restored OTA
 // files (and the guest daemon uses it for system apps). Linux has renameat2(RENAME_EXCHANGE);
 // the call sites pass Swift strings, so the shim takes strings too.

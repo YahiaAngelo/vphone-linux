@@ -4,3 +4,6 @@
 Firmware/VPhoneFirmwareIndex.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = Unmanaged.passRetained(session) \/\/ vphone-linux: never free a URLSession on Linux Foundation (_MultiHandle deinit aborts); this one lives for the process/
 Firmware/VPhoneAEA.swift	s/defer \{ session\.invalidateAndCancel\(\) \}/_ = Unmanaged.passRetained(session) \/\/ vphone-linux: never free a URLSession on Linux Foundation (_MultiHandle deinit aborts); this one lives for the process/
 VirtualMachine/VPhoneShaderCache.swift	s/confstr\(_CS_DARWIN_USER_CACHE_DIR, /vphoneUserCacheDir(/
+# Use Linux timestamp members directly when CoreFoundation is imported in the module.
+Bundle/VPhoneDiskRebase.swift	s/info\.st_atimespec/info.st_atim/g; s/info\.st_mtimespec/info.st_mtim/g; s/info\.st_ctimespec/info.st_ctim/g
+Support/VPhoneFileDigestCache.swift	s/info\.st_mtimespec/info.st_mtim/g; s/info\.st_ctimespec/info.st_ctim/g
