@@ -85,3 +85,26 @@ stubs. The copied SSHFS wrapper substitutes only its absolute SSH executable wit
 stub; the production wrapper keeps `/usr/bin/ssh`. The connection check also passes a literal
 connector path through the real FUSE option parser and OpenSSH to a local stub that exits
 without network or USB access. These checks do not create mounts or verify a guest installation.
+
+Native restore-TXM admission uses the shared signature-classification and missing-profile matchers
+of the pinned CLI (`2.17.1`). The extra TXM site follows the restore kernel's resolved AMFI
+trust-cache policy; disabled profile waivers remain disabled, and incomplete native admission is
+refused before writing. The CLI's opt-in `txm-exp-precheck_admission` patch is for the guest's TXM:
+the restore-TXM helper does not apply it. iOS 18 restore-TXM and native validation are still pending.
+
+The release-TXM regression uses a private, pristine `txm.iphoneos.release.im4p` from TXM
+`187.100.3`. Only its identity metadata is tracked. With Swift 6.4.1 and synchronized sources:
+
+```sh
+VPHONE_RESTORE_TXM_187_100_3=/private/firmware/txm.iphoneos.release.im4p \
+  swift test --package-path linux-create --filter RestoreTXMTests
+```
+
+The fixture checks are skipped when the variable is unset. They exercise the actual Swift
+patcher and container writer on private copies, including refusal without writes for changed
+cache/classifier/profile or incomplete selector-24 sites. SSH ramdisk boot, normal guest boot, and
+touchscreen input remain separate native checks.
+
+Unsupported restore-TXM layouts fail before writing. The error includes the embedded
+`TrustedExecutionMonitor` build label when available, or `unknown build`, and the original
+matcher failure. A different build label does not bypass the native-layout checks.

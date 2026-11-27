@@ -6,7 +6,7 @@
 #
 # A full restore needs the stock ramdisk (its restored_external is the restore daemon) and the
 # release restore kernel. The SSH ramdisk needs the SSH ramdisk image, a trust cache that admits
-# its tools, TXM's selector-24 pre-check forced to PASS, and the research kernel as the restore
+# its tools, TXM's native signature classification and selector-24 patches, and the research kernel as the restore
 # kernel (its AMFI lets the ad-hoc SSH tools run). Every manifest entry this changes gets the
 # file's SHA-384 as its digest.
 #
@@ -61,7 +61,7 @@ ssh)
     cp "$SSHRD" "$T/$RD"
     echo "=== trust cache -> $TC"
     python3 tools/ssh-ramdisk-trustcache.py "$STOCK_RTSC" "$SSHROOT" "$T/$TC"
-    echo "=== TXM selector-24 pre-check -> PASS"
+    echo "=== TXM native signature classification and selector-24 admission"
     # Always patch the full-restore TXM, so running this twice is safe.
     cp "$T/$TXM.full-restore" "$T/$TXM"
     # Its own manifest refresh can fail ("file doesn't exist"); the digests are set below.

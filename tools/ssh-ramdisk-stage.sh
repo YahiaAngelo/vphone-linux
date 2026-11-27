@@ -16,7 +16,7 @@
 # clang, xtool's Darwin SDK bundle (DARWIN_SDK_BUNDLE), and rcodesign (RCODESIGN).
 # The tools run because
 # tools/ssh-ramdisk-trustcache.py adds their code hashes to the ramdisk's trust cache and
-# `fw patch --restore-txm-precheck` lets TXM admit them (tools/restore-tree-mode.sh does both).
+# `fw patch --restore-txm-precheck` applies native TXM admission (tools/restore-tree-mode.sh does both).
 # This reproduces the staging tree the tested SSH ramdisk was built from, without its optional PRNG
 # seeder (usr/libexec/prng_seedctl, which exited without effect there). No root needed.
 set -euo pipefail
