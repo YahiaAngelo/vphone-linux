@@ -73,5 +73,6 @@ let package = Package(
                 path: "Sources/VPhoneRestore", swiftSettings: swift6),
         .target(name: "FirmwarePatcher", dependencies: ["VLCryptoKit", "VLDarwin", "LinuxSys", "Img4tool", "VPhonePatchKit", "VPhoneCoreKit", "VPhoneSign", "VPhoneArchiveKit", "VLos", .product(name: "MachOKit", package: "MachOKit")], path: "Sources/FirmwarePatcher", swiftSettings: swift6),
         .testTarget(name: "RestoreTXMTests", dependencies: ["FirmwarePatcher", "Img4tool", "VPhonePatchKit", "VLCryptoKit"], path: "Tests/RestoreTXMTests", resources: [.copy("Fixtures")]),
+        .testTarget(name: "VPhoneStagedDyldCacheTests", dependencies: ["VPhoneCoreKit", "VLCryptoKit", "VLDarwin"], path: "Tests/VPhoneStagedDyldCacheTests", swiftSettings: swift6),
     ]
 )
