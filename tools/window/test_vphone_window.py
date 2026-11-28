@@ -5,6 +5,8 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -143,6 +145,7 @@ class WindowLoopTests(unittest.TestCase):
         events = []
         windows = []
         guests = []
+        remaining = list(orientations)
 
         class FakeGuest:
             def __init__(self, cid):
@@ -154,6 +157,26 @@ class WindowLoopTests(unittest.TestCase):
                 self.reads += 1
                 events.append("orientation")
                 return next(self.replies)
+
+        class FakePoller:
+            def __init__(self, guest, on_update=None):
+                self.guest = guest
+                self.on_update = on_update
+                self.started = False
+                self.stopped = False
+
+            def start(self):
+                self.started = True
+
+            def stop(self):
+                self.stopped = True
+
+            def drain(self):
+                if not self.started or not remaining:
+                    return []
+                remaining.pop(0)
+                o = self.guest.orientation()
+                return [o] if o is not None else []
 
         class FakeWindow:
             def __init__(self, path):
@@ -187,6 +210,7 @@ class WindowLoopTests(unittest.TestCase):
                         plistlib.dump(config, stream)
                 argv += ["--config", str(config_path)]
             with mock.patch.object(window, "Guest", FakeGuest), \
+                mock.patch.object(window, "OrientationPoller", FakePoller), \
                 mock.patch.object(window, "Window", FakeWindow), \
                 mock.patch.object(window, "ClockSync") as clock, \
                 mock.patch.object(window, "atlas_for", return_value="mock-atlas.rgba"), \
@@ -209,6 +233,64 @@ class WindowLoopTests(unittest.TestCase):
                 clock.return_value.stop.assert_called_once_with()
 
         return events, windows[0], guests[0]
+
+    def test_slow_orientation_poll_does_not_block_toolbar_button_clicks(self):
+        gate = threading.Event()
+        entered = threading.Event()
+        acted = []
+
+        class BlockingGuest:
+            def __init__(self, cid):
+                pass
+
+            def orientation(self):
+                entered.set()
+                gate.wait(2.0)
+                return None
+
+            def act(self, button):
+                acted.append(button)
+
+        class ClickWindow:
+            def __init__(self, path):
+                self.sock = None
+                self.sent_click = False
+
+            def connect(self):
+                self.sock = object()
+                return True
+
+            def send(self, line):
+                pass
+
+            def lines(self, timeout):
+                if not self.sent_click:
+                    self.sent_click = True
+                    return ["button home"]
+                return []
+
+            def drop(self):
+                self.sock = None
+
+        parent_ids = iter([77, 77, 77, 0])
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.plist"
+            with config_path.open("wb") as stream:
+                plistlib.dump({"guestProductType": "iPhone19,4"}, stream)
+            start = time.monotonic()
+            with mock.patch.object(window, "Guest", BlockingGuest), \
+                mock.patch.object(window, "Window", ClickWindow), \
+                mock.patch.object(window, "ClockSync"), \
+                mock.patch.object(window, "atlas_for", return_value="mock-atlas.rgba"), \
+                mock.patch.object(window, "log"), \
+                mock.patch.object(window.os, "getppid", side_effect=lambda: next(parent_ids)), \
+                mock.patch.object(window.sys, "argv", [str(MODULE_PATH), "/tmp/control.sock", "--config", str(config_path)]):
+                window.main()
+            elapsed = time.monotonic() - start
+            gate.set()
+
+        self.assertEqual(acted, ["home"])
+        self.assertLess(elapsed, 1.0)
 
     def test_clock_sync_can_be_turned_off(self):
         self.run_loop(orientations=[], parent_ids=[77, 77, 0],

@@ -136,13 +136,36 @@ git clone https://github.com/YahiaAngelo/vphone-linux.git && cd vphone-linux
 ```
 
 The setup scripts guide you through the process. `create-vm.sh` leaves the new VM running and
-unlocked. To start it again later:
+unlocked. To start it again later, use the `./vphone` launcher:
 
 ```sh
-./setup/start-vm.sh          # Start and unlock a VM (shows a menu if you have several)
-./setup/start-vm.sh --stop   # Shut down iOS
-./setup/start-vm.sh --list   # List your VMs and their running state
-./setup/start-vm.sh --trim   # Reduce background services and resource use
+./vphone                     # Start the VM (or set VPHONE_VM=NAME), wait until unlocked
+./vphone start --fast        # Return as soon as QEMU is up, without the unlock wait
+./vphone stop                # Shut down iOS
+./vphone list                # List your VMs and their running state
+./vphone logs                # Follow the VM's serial log
+```
+
+To run it as `vphone` from any directory, install the symlink once:
+
+```sh
+./vphone install             # links into ~/.local/bin (override with VPHONE_BIN_DIR)
+vphone list
+```
+
+The launcher resolves symlinks, so the link picks up this checkout's `setup/start-vm.sh`. If
+`~/.local/bin` is not on your `PATH`, `install` warns you instead of failing.
+
+`./vphone` is a thin wrapper around `setup/start-vm.sh`: it discovers completed VMs, forwards its
+environment and start options (`--no-window`, `--cid N`, `--trim`, `--untrim`), and keeps the same
+window and unlock behaviour. Run `./vphone help` for all commands. Auto-selection sees a VM once
+`create-vm.sh` has written its final `booted` step; a half-created VM can still be started by name.
+With several VMs, `./vphone start` leaves the choice to `start-vm.sh`'s menu (needs a terminal),
+while the other commands need a name or `VPHONE_VM`:
+
+```sh
+./vphone --trim              # Reduce background services and resource use
+./vphone --cid 4 my-vm       # Override the recorded vsock CID
 ```
 
 `--trim` (also available on `create-vm.sh`) applies vphoned's `trimmed` service profile: Siri and

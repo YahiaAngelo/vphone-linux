@@ -115,8 +115,8 @@ public struct VPhoneTreeFingerprint: Codable, Equatable, Sendable {
                 uid: Int(info.st_uid),
                 gid: Int(info.st_gid),
                 size: fileType == S_IFREG ? Int64(info.st_size) : 0,
-                mtimeNanoseconds: Int64(info.st_mtimespec.tv_sec) * 1_000_000_000
-                    + Int64(info.st_mtimespec.tv_nsec),
+                mtimeNanoseconds: Int64(info.st_mtim.tv_sec) * 1_000_000_000
+                    + Int64(info.st_mtim.tv_nsec),
                 linkTarget: fileType == S_IFLNK
                     ? try? FileManager.default.destinationOfSymbolicLink(atPath: path)
                     : nil,

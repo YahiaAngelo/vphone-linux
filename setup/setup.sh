@@ -206,20 +206,47 @@ build_reims() {
   # Always: cargo rebuilds only what changed, and a submodule update must reach the library
   # (QEMU is relinked below when the library is newer than it).
   log " Building reims-vgpu (the first build is long: its static lib is ~800 MB)"
-  make -C "$VSETUP_SRC/reims-vgpu"
+  if [ "$VPHONE_NATIVE_OPT" = 1 ] && [[ " ${RUSTFLAGS:-} " != *"target-cpu="* ]]; then
+    RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native" make -C "$VSETUP_SRC/reims-vgpu"
+  else
+    make -C "$VSETUP_SRC/reims-vgpu"
+  fi
 }
 build_qemu() {
   # Always: ninja rebuilds only what changed, so an update of the qemu submodule (or a newer
   # reims-vgpu library, which QEMU links statically) reaches the binary.
   local pkgcfg="$VSETUP_SRC/reims-vgpu/target/dist-vulkan/lib/pkgconfig"
+  local reims_header="$VSETUP_SRC/reims-vgpu/target/dist-vulkan/include/reims_vgpu.h"
+  local build_dir="$VSETUP_SRC/qemu/build"
+  local stamp_file="$build_dir/.vphone-build-flags"
+  local want_stamp have_stamp=""
+  local qemu_extra=() opt
+  want_stamp=$(qemu_flags_stamp "$reims_header")
+  if [ -f "$stamp_file" ]; then
+    have_stamp=$(cat "$stamp_file")
+  fi
   log " Building QEMU (-M vresearch101) against reims-vgpu"
-  mkdir -p "$VSETUP_SRC/qemu/build"
-  ( export PKG_CONFIG_PATH=$pkgcfg
-    cd "$VSETUP_SRC/qemu/build"
-    [ -f config.status ] || ../configure --target-list=aarch64-softmmu --enable-pvg \
-      --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
-      --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug
-    ninja qemu-system-aarch64 )
+  if [ ! -f "$build_dir/config.status" ] || [ ! -f "$build_dir/build.ninja" ] || [ "$have_stamp" != "$want_stamp" ]; then
+    if [ -d "$build_dir" ]; then
+      if [ "$have_stamp" != "$want_stamp" ] && { [ -f "$build_dir/config.status" ] || [ -f "$build_dir/build.ninja" ]; }; then
+        log " Removing $build_dir for clean QEMU configure (build stamp changed: ${have_stamp:-<none>} -> $want_stamp)"
+      fi
+      [ -n "$VSETUP_SRC" ] || die "VSETUP_SRC is empty"
+      rm -rf "$build_dir"
+    fi
+    while IFS= read -r -d '' opt; do
+      qemu_extra+=("$opt")
+    done < <(qemu_opt_args)
+    mkdir -p "$build_dir"
+    ( cd "$build_dir"
+      PKG_CONFIG_PATH="$pkgcfg" ../configure --target-list=aarch64-softmmu --enable-pvg \
+        --enable-lzfse --enable-slirp --enable-libssh --enable-zstd --enable-nettle \
+        --enable-gnutls --enable-gtk --enable-sdl --disable-werror --disable-qom-cast-debug \
+        "${qemu_extra[@]}" )
+    printf '%s\n' "$want_stamp" > "$stamp_file"
+  fi
+  ( cd "$build_dir"
+    PKG_CONFIG_PATH="$pkgcfg" ninja qemu-system-aarch64 )
 }
 build_creator() {
   local src=${VPHONE_CLI:-$VSETUP_SRC/cpu-tree/vphone-cli-$VPHONE_CLI_VERSION}

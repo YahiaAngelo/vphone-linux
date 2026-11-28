@@ -1,4 +1,4 @@
-# vphone-setup shared helpers. Sourced by setup.sh and create-vm.sh.
+# vphone-setup shared helpers. Sourced by setup.sh, create-vm.sh, and build.sh.
 # All paths live under this checkout; nothing outside it is touched, and no
 # script here ever sends signals to QEMU (booting and stopping VMs is left to
 # the run tool the user drives).
@@ -158,4 +158,48 @@ is_wsl() { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/sys/kernel/
 
 require_root() {
   [ "$(id -u)" = 0 ] || die "this step needs root (built-in steps tell you when)"
+}
+
+# Opt-in QEMU/reims-vgpu build switches (all off by default).
+VPHONE_NATIVE_OPT=${VPHONE_NATIVE_OPT:-0}
+VPHONE_LTO=${VPHONE_LTO:-0}
+VPHONE_NDEBUG=${VPHONE_NDEBUG:-0}
+
+qemu_flags_stamp() {
+  local reims_header=${1:-$VSETUP_SRC/reims-vgpu/target/dist-vulkan/include/reims_vgpu.h}
+  local native=0 lto=0 ndebug=0 header_hash=missing
+  if [ "${VPHONE_NATIVE_OPT:-0}" = 1 ]; then native=1; fi
+  if [ "${VPHONE_LTO:-0}" = 1 ]; then lto=1; fi
+  if [ "${VPHONE_NDEBUG:-0}" = 1 ]; then ndebug=1; fi
+  if [ -n "$reims_header" ] && [ -f "$reims_header" ]; then
+    if have sha256sum; then
+      header_hash=$(sha256sum "$reims_header" | awk '{print $1}')
+    elif have shasum; then
+      header_hash=$(shasum -a 256 "$reims_header" | awk '{print $1}')
+    else
+      die "sha256sum or shasum is required to hash $reims_header"
+    fi
+  fi
+  printf 'native=%s lto=%s ndebug=%s reims_header=%s\n' \
+    "$native" "$lto" "$ndebug" "$header_hash"
+}
+
+qemu_opt_args() {
+  local opts=()
+  local cflags=""
+  if [ "${VPHONE_LTO:-0}" = 1 ]; then
+    opts+=(--enable-lto)
+  fi
+  if [ "${VPHONE_NATIVE_OPT:-0}" = 1 ]; then
+    cflags="${cflags:+${cflags} }-O3 -march=native"
+  fi
+  if [ "${VPHONE_NDEBUG:-0}" = 1 ]; then
+    cflags="${cflags:+${cflags} }-DNDEBUG -DG_DISABLE_ASSERT"
+  fi
+  if [ -n "$cflags" ]; then
+    opts+=("--extra-cflags=$cflags")
+  fi
+  if [ ${#opts[@]} -gt 0 ]; then
+    printf '%s\0' "${opts[@]}"
+  fi
 }

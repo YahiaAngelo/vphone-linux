@@ -199,7 +199,7 @@ Environment variables read by `run-vphone.sh`:
 | `VPHONE_XPAGE_LINKS` | `1` | Checked cross-page direct-branch links |
 | `VPHONE_RET_PREFETCH` | `2` | Return-address jump cache prefetch at calls: `2` inline, `1` through a helper, `0` off |
 | `VPHONE_XHCI_NONREMOVABLE` | `0x1fe` | Bit n marks xHCI root port n non-removable. Needed for touch |
-| `VPHONE_CPUS` | `/sys/devices/cpu_core/cpus` (P-cores), if present | `taskset` CPU list for QEMU. Empty = no pinning |
+| `VPHONE_CPUS` | `/sys/devices/cpu_core/cpus` (Intel P-cores), else the largest-L3 CCD on asymmetric AMD 3D V-Cache hosts, if present | `taskset` CPU list for QEMU. Empty = no pinning. Falls back to unpinned with a warning if `taskset` cannot apply the CPU list (for example inside a restricted container cpuset) |
 | `CID` | `3` | vsock guest CID, unique per running VM. `0` = no vsock |
 | `VSOCK` | `vhost` | `vhost` (kernel vhost-vsock), `uds` (`virtio-vsock-uds-pci`, branch `vsock-uds`), `auto` |
 | `VSOCK_DIR` | `/tmp/vphone-vsock` | Directory of the `uds` sockets (`$CID.sock`) |
@@ -207,6 +207,16 @@ Environment variables read by `run-vphone.sh`:
 | `DFLAGS` | | QEMU log items (`-d`), e.g. `guest_errors,unimp` |
 | `TRACE` | | QEMU trace pattern (`-trace`) |
 | `GDB` | | Port: start halted and wait for gdb |
+
+## Build switches
+
+Environment variables read by `build.sh` and `setup/setup.sh`. All default to `0`, keeping QEMU debug info, asserts, and hardening flags unchanged from upstream. `qemu/build/.vphone-build-flags` records both the active build switches and the SHA-256 hash of `reims-vgpu/target/dist-vulkan/include/reims_vgpu.h`; when either changes, `qemu/build` is removed and configured from scratch so Meson's cached header checks do not go stale.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `VPHONE_NATIVE_OPT` | `0` | `1` adds `-O3 -march=native` to QEMU `--extra-cflags` (keeping debug info and asserts on) and `-C target-cpu=native` to `RUSTFLAGS` for `reims-vgpu` (unless `target-cpu=` is already set). Builds are tuned for the build host CPU; copying or sharing the build tree onto a host with an older CPU can fail with `SIGILL` |
+| `VPHONE_LTO` | `0` | `1` passes `--enable-lto` to QEMU configure. Every rebuild relinks against the ~800 MB `libreims_vgpu.a` with LTO, which slows link times and increases memory usage (can OOM on 16 GB or WSL2 hosts) |
+| `VPHONE_NDEBUG` | `0` | `1` adds `-DNDEBUG -DG_DISABLE_ASSERT` to QEMU `--extra-cflags` while keeping debug info intact. Disables `assert()` and `g_assert()`; avoid when reproducing or reporting bugs |
 
 ## QEMU switches (fork, environment)
 
